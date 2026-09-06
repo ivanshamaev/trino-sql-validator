@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Rust
+target/
+
+# maturin
+*.so
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Tooling caches
+.ruff_cache
+.mypy_cache
+.pytest_cache

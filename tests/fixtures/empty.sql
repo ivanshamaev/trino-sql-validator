@@ -1,0 +1,2 @@
+-- empty.sql — intentionally blank (whitespace + comments only)
+-- nothing to validate here

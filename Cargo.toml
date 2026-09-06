@@ -1,0 +1,27 @@
+[package]
+name = "trino-sql-validator"
+version = "0.1.0"
+edition = "2021"
+description = "Fast Trino SQL syntax validator — Python library backed by Rust"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/OWNER/trino-sql-validator"
+keywords = ["trino", "sql", "validator", "pyo3"]
+categories = ["programming-language", "parser-implementations"]
+rust-version = "1.80"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+sqlparser = { version = "0.62", default-features = true }
+regex = "1"
+
+[dev-dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
