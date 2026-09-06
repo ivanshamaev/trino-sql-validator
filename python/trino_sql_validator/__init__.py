@@ -15,15 +15,23 @@ from ._native import validate_file as _native_validate_file
 
 __all__ = [
     "Error",
+    "FunctionWarning",
     "ValidationResult",
     "__version__",
     "validate",
     "validate_file",
 ]
 
-_NativeResult = tuple[bool, int, str | None, int | None, int | None]
-"""Tuple shape returned by the Rust core: (valid, statement_count, error,
-message, line, column)."""
+_NativeResult = tuple[
+    bool,
+    int,
+    str | None,
+    int | None,
+    int | None,
+    tuple[tuple[str, int | None, int | None], ...],
+]
+"""Tuple shape returned by the Rust core: (valid, statement_count, error
+message, line, column, warnings)."""
 
 __version__ = _native.__version__
 
@@ -45,20 +53,51 @@ class Error:
 
 
 @dataclass(frozen=True)
+class FunctionWarning:
+    """A call to a function that is not in the documented Trino catalog.
+
+    ``valid`` stays ``True`` for such statements — name checks are advisory,
+    not syntax errors (a deployed Trino may still offer plugin functions that
+    the docs do not list).
+    """
+
+    name: str
+    line: int | None = None
+    column: int | None = None
+
+    def __str__(self) -> str:
+        if self.line is not None and self.column is not None:
+            return f"unknown function '{self.name}' at line {self.line}, column {self.column}"
+        return f"unknown function '{self.name}'"
+
+
+@dataclass(frozen=True)
 class ValidationResult:
     """Structured outcome of validating one or more SQL statements."""
 
     valid: bool
     statement_count: int
     error: Error | None = None
+    warnings: tuple[FunctionWarning, ...] = ()
+
+    @property
+    def unknown_functions(self) -> list[str]:
+        """Function names used in the SQL that have no Trino documentation
+        entry, in order of appearance."""
+        return [warning.name for warning in self.warnings]
 
     def __bool__(self) -> bool:
         return self.valid
 
     def __repr__(self) -> str:
-        if self.valid:
-            return f"<ValidationResult valid=True statements={self.statement_count}>"
-        return f"<ValidationResult valid=False error={self.error!r}>"
+        if not self.valid:
+            return f"<ValidationResult valid=False error={self.error!r}>"
+        if self.warnings:
+            return (
+                f"<ValidationResult valid=True statements={self.statement_count} "
+                f"warnings={len(self.warnings)}>"
+            )
+        return f"<ValidationResult valid=True statements={self.statement_count}>"
 
 
 _SUPPORTED_DIALECTS = ("trino", "hive", "generic")
@@ -69,11 +108,12 @@ def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
         raise ValueError(
             f"unknown dialect {dialect!r}; expected one of {_SUPPORTED_DIALECTS}"
         )
-    valid, statement_count, message, line, column = call
+    valid, statement_count, message, line, column, warnings = call
     return ValidationResult(
         valid=bool(valid),
         statement_count=int(statement_count),
         error=Error(message=message, line=line, column=column) if message else None,
+        warnings=tuple(FunctionWarning(name=name, line=wl, column=wc) for name, wl, wc in warnings),
     )
 
 

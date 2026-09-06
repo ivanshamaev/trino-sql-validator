@@ -43,12 +43,16 @@ trino-sql-validator/
 ├── AGENTS.md
 ├── plan/
 │   ├── plan.md               # this file
-│   └── roadmap.md            # future work (Trino-exact grammar, etc.)
+│   ├── roadmap.md            # future work (Trino-exact grammar, etc.)
+│   └── functions-validation.md # function-name validation plan (v0.2.0)
 ├── src/
 │   ├── lib.rs                # #[pymodule] entry point
+│   ├── functions.rs          # GENERATED Trino function catalog (459 names)
 │   ├── dialects/
 │   │   └── mod.rs            # TrinoDialect (impl Dialect trait)
 │   └── error.rs              # Mapping ParserError -> Python exception info
+├── tools/
+│   └── extract_functions.py  # regenerates src/functions.rs from Trino docs
 ├── python/trino_sql_validator/
 │   ├── __init__.py           # pure-Python public API (re-exports, __all__)
 │   ├── _validator.pyi        # type stubs referencing the compiled _native module

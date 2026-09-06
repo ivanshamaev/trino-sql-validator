@@ -33,6 +33,23 @@ Invalid SQL (and files containing it) is returned as a `ValidationResult`;
 it is **not** raised as an exception. Only genuine misuse (unknown dialect,
 unreadable file) raises.
 
+### Function-name warnings
+
+For `dialect="trino"`, `validate()` also checks that every function called in
+the SQL exists in the documented Trino catalog. Unknown names are reported as
+non-fatal `warnings` — `valid` stays `True` because syntax is fine:
+
+```python
+result = validate("SELECT marh(1.5)")      # round() misspelled
+assert result.valid
+print(result.warnings)                     # (FunctionWarning(name='marh', line=1, column=8),)
+print(result.unknown_functions)            # ['marh']
+```
+
+The catalog is auto-generated from the Trino docs and only checks *name
+existence*, not argument count or types. `hive`/`generic` dialects skip this
+check.
+
 ### Dialects
 
 - `"trino"` (default) — Trino-flavored with a custom override tuned for

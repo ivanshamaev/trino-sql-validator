@@ -118,3 +118,68 @@ def test_supported_dialects_have_different_strictness() -> None:
 
     result_generic = validate("SELECT `a` FROM t", dialect="generic")
     assert result_generic.valid is True
+
+
+def test_known_functions_produce_no_warnings() -> None:
+    result = validate("SELECT round(1.5), array_agg(x), count(*), sum(y) FROM t")
+    assert result.valid is True
+    assert result.warnings == ()
+    assert result.unknown_functions == []
+
+
+def test_unknown_function_reports_warning() -> None:
+    result = validate("SELECT marh(1.5)")
+    assert result.valid is True
+    assert len(result.warnings) == 1
+    warning = result.warnings[0]
+    assert warning.name == "marh"
+    assert warning.line == 1
+    assert warning.column == 8
+    assert result.unknown_functions == ["marh"]
+
+
+def test_unknown_function_detection_is_case_insensitive() -> None:
+    result = validate("SELECT POLLUTION(x)")
+    assert result.unknown_functions == ["pollution"]
+
+
+def test_nested_call_unknown_function() -> None:
+    result = validate("SELECT round(marh(x))")
+    assert result.unknown_functions == ["marh"]
+
+
+def test_qualified_unknown_function() -> None:
+    result = validate("SELECT schema.foobar(y) FROM t")
+    assert result.unknown_functions == ["foobar"]
+
+
+def test_unknown_function_position_on_later_line() -> None:
+    result = validate("SELECT 1\nFROM t\nWHERE x = zort(2)")
+    assert result.unknown_functions == ["zort"]
+    assert result.warnings[0].line == 3
+    assert result.warnings[0].column == 11
+
+
+def test_function_checking_skipped_for_non_trino_dialect() -> None:
+    result = validate("SELECT marh(1)", dialect="generic")
+    assert result.valid is True
+    assert result.warnings == ()
+
+    result_hive = validate("SELECT marh(1)", dialect="hive")
+    assert result_hive.valid is True
+    assert result_hive.warnings == ()
+
+
+def test_invalid_sql_has_no_warnings() -> None:
+    result = validate("SELECT marh(1 FORM")
+    assert result.valid is False
+    assert result.error is not None
+    assert result.warnings == ()
+
+
+def test_trino_only_functions_are_known() -> None:
+    result = validate(
+        "SELECT approx_distinct(x), approx_percentile(y, 0.9), "
+        "bing_tile(x), json_format(z) FROM t"
+    )
+    assert result.warnings == ()

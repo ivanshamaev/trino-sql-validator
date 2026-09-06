@@ -10,10 +10,12 @@ Built with PyO3 + maturin. Distributed as wheels + sdist on PyPI.
 Layout:
 - `src/` — Rust crate (the compiled `_native` extension). `src/lib.rs` holds the
   `#[pymodule] fn _native`. `src/dialects/` holds the `TrinoDialect`/`SqlDialect`.
+  `src/functions.rs` is the **generated** Trino function catalog (`@generated`).
 - `python/trino_sql_validator/` — pure-Python public API (`__init__.py`), type
   stubs (`_native.pyi`), `py.typed`.
 - `tests/` — pytest suite for the public API (+ `.sql` fixtures).
-- `plan/` — planning docs (`plan.md`, `roadmap.md`).
+- `plan/` — planning docs (`plan.md`, `roadmap.md`, `functions-validation.md`).
+- `tools/extract_functions.py` — regenerates `src/functions.rs` from Trino docs.
 
 ## Source of truth
 
@@ -47,6 +49,10 @@ mypy python/trino_sql_validator
 # Produce distributable artifacts
 maturin build --release          # wheels
 maturin sdist                    # source distribution
+
+# Regenerate the Trino function catalog from upstream docs
+python tools/extract_functions.py            # fetch from GitHub
+python tools/extract_functions.py --docs-path /path/to/trino/docs/src/main/sphinx/functions  # local checkout
 ```
 
 ## Conventions / rules
@@ -87,3 +93,9 @@ maturin sdist                    # source distribution
 semantic analysis and can reject exotic Trino-specific DDL. This is a documented,
 accepted limitation (see README + plan/roadmap.md). Do not "fix" by loosening the
 dialect to Generic by default for `dialect="trino"`.
+
+Function validation (`ValidationResult.warnings`) checks only **name existence**
+against the documented Trino catalog (`src/functions.rs`); it does not check
+arity or argument types — that is semantic analysis, out of scope for a syntax
+validator. False positives are possible if a deployed Trino has plugin functions
+beyond the docs; warnings are non-fatal by design.

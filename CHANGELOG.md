@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-06
+
+### Added
+
+- Trino **function-name validation**: for `dialect="trino"`, `validate()` and
+  `validate_file()` now walk the parsed AST and flag calls to functions that are
+  not in the documented Trino catalog (e.g. a misspelled `round`).
+- New `ValidationResult.warnings` (`FunctionWarning`) and convenience property
+  `ValidationResult.unknown_functions`. Unknown functions are non-fatal warnings
+  — `valid` stays `True` because the syntax is fine.
+- `tools/extract_functions.py` — regenerates the embedded catalog
+  (`src/functions.rs`, 459 canonical names) from the Trino docs; committed so
+  builds stay offline and deterministic.
+
 ## [0.1.0] - 2026-09-06
 
 Initial release.

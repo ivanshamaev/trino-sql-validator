@@ -235,6 +235,18 @@ checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
 dependencies = [
  "log",
  "recursive",
+ "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6dd45d8fc1c79299bfbb7190e42ccbbdf6a5f52e4a6ad98d92357ea965bd289"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -269,7 +281,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "trino-sql-validator"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pyo3",
  "regex",

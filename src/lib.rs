@@ -1,5 +1,8 @@
+use core::ops::ControlFlow;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use sqlparser::ast::visit_expressions;
+use sqlparser::ast::{Expr, Ident, Statement};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -7,10 +10,20 @@ use crate::dialects::SqlDialect;
 use sqlparser::parser::{Parser, ParserError};
 
 pub mod dialects;
+pub mod functions;
 
 const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-type ValidationResultTuple = (bool, usize, Option<String>, Option<usize>, Option<usize>);
+/// `(valid, statement_count, error_message, error_line, error_column,
+/// warnings)` where each warning is `(function_name, line, column)`.
+type ValidationResultTuple = (
+    bool,
+    usize,
+    Option<String>,
+    Option<usize>,
+    Option<usize>,
+    Vec<(String, Option<usize>, Option<usize>)>,
+);
 
 static LOCATION_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"at Line: (\d+), Column: (\d+)").unwrap());
@@ -21,11 +34,48 @@ static LOCATION_SUFFIX_PATTERN: LazyLock<regex::Regex> =
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
     let parser = dialect.parser();
     match Parser::parse_sql(parser.as_ref(), sql) {
-        Ok(statements) => (true, statements.len(), None, None, None),
+        Ok(statements) => {
+            let warnings = if *dialect == SqlDialect::Trino {
+                find_unknown_functions(&statements)
+            } else {
+                Vec::new()
+            };
+            (true, statements.len(), None, None, None, warnings)
+        }
         Err(err) => {
             let (message, line, column) = error_details(err);
-            (false, 0, Some(message), line, column)
+            (false, 0, Some(message), line, column, Vec::new())
         }
+    }
+}
+
+/// Walk every expression in the parsed statements and collect function calls
+/// whose name is not in the Trino catalog, with the call site's line/column.
+fn find_unknown_functions(
+    statements: &Vec<Statement>,
+) -> Vec<(String, Option<usize>, Option<usize>)> {
+    let mut unknown = Vec::new();
+    let _ = visit_expressions(statements, |expr| {
+        if let Expr::Function(func) = expr {
+            if let Some(ident) = func.name.0.last().and_then(|part| part.as_ident()) {
+                let name = ident.value.to_ascii_lowercase();
+                if !functions::is_known_function(&name) {
+                    let (line, column) = span_position(ident);
+                    unknown.push((name, line, column));
+                }
+            }
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    unknown
+}
+
+fn span_position(ident: &Ident) -> (Option<usize>, Option<usize>) {
+    let start = ident.span.start;
+    if start.line == 0 {
+        (None, None)
+    } else {
+        (Some(start.line as usize), Some(start.column as usize))
     }
 }
 
@@ -55,7 +105,10 @@ fn extract_location(message: &str) -> (Option<usize>, Option<usize>) {
 
 /// Validate a SQL string (one or more statements) against a dialect.
 ///
-/// Returns `(valid, statement_count, error_message, error_line, error_column)`.
+/// Returns `(valid, statement_count, error_message, error_line, error_column,
+/// warnings)`. For the `trino` dialect, `warnings` reports calls to functions
+/// that are not in the documented Trino catalog (each entry is
+/// `(name, line, column)`).
 ///
 /// Invalid SQL is reported as a tuple value — this function never raises for
 /// bad syntax. Only real programming errors (e.g. unknown dialect) raise.
@@ -99,28 +152,28 @@ mod tests {
 
     #[test]
     fn empty_sql_is_valid_zero_statements() {
-        let (valid, count, _, _, _) = validate_sql_impl("", &trino());
+        let (valid, count, _, _, _, _) = validate_sql_impl("", &trino());
         assert!(valid);
         assert_eq!(count, 0);
     }
 
     #[test]
     fn comments_only_is_zero_statements() {
-        let (valid, count, _, _, _) = validate_sql_impl("-- hello\n/* block */", &trino());
+        let (valid, count, _, _, _, _) = validate_sql_impl("-- hello\n/* block */", &trino());
         assert!(valid);
         assert_eq!(count, 0);
     }
 
     #[test]
     fn single_statement_is_valid() {
-        let (valid, count, _, _, _) = validate_sql_impl("SELECT 1", &trino());
+        let (valid, count, _, _, _, _) = validate_sql_impl("SELECT 1", &trino());
         assert!(valid);
         assert_eq!(count, 1);
     }
 
     #[test]
     fn multiple_statements_are_valid() {
-        let (valid, count, _, _, _) = validate_sql_impl(
+        let (valid, count, _, _, _, _) = validate_sql_impl(
             "SELECT 1; SELECT * FROM t WHERE a > 0; DROP TABLE x;",
             &trino(),
         );
@@ -130,14 +183,14 @@ mod tests {
 
     #[test]
     fn trailing_semicolon_is_fine() {
-        let (valid, count, _, _, _) = validate_sql_impl("SELECT 1;", &trino());
+        let (valid, count, _, _, _, _) = validate_sql_impl("SELECT 1;", &trino());
         assert!(valid);
         assert_eq!(count, 1);
     }
 
     #[test]
     fn invalid_sql_reports_location() {
-        let (valid, count, message, line, column) = validate_sql_impl("SELECT * FORM", &trino());
+        let (valid, count, message, line, column, _) = validate_sql_impl("SELECT * FORM", &trino());
         assert!(!valid);
         assert_eq!(count, 0);
         let message = message.unwrap();
@@ -148,12 +201,62 @@ mod tests {
 
     #[test]
     fn trino_accepts_string_backslash_escape() {
-        let (valid, _, _, _, _) = validate_sql_impl("SELECT 'ab\\'cd'", &trino());
+        let (valid, _, _, _, _, _) = validate_sql_impl("SELECT 'ab\\'cd'", &trino());
         assert!(valid);
     }
 
     #[test]
     fn unknown_dialect_raises() {
         assert!(SqlDialect::from_str("mysql").is_err());
+    }
+
+    #[test]
+    fn known_functions_produce_no_warnings() {
+        let (_, _, _, _, _, warnings) =
+            validate_sql_impl("SELECT round(1.5), array_agg(x), count(*) FROM t", &trino());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn unknown_function_reports_name_and_position() {
+        let (valid, _, _, _, _, warnings) = validate_sql_impl("SELECT marh(1.5)", &trino());
+        assert!(valid);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, "marh");
+        assert_eq!(warnings[0].1, Some(1));
+        assert_eq!(warnings[0].2, Some(8)); // "marh(" starts at column 8
+    }
+
+    #[test]
+    fn nested_and_qualified_calls_are_found() {
+        let (_, _, _, _, _, warnings) = validate_sql_impl(
+            "SELECT round(marh(x)), schema.foobar(y), baz FROM t",
+            &trino(),
+        );
+        let names: Vec<_> = warnings.iter().map(|w| w.0.as_str()).collect();
+        assert_eq!(names, vec!["marh", "foobar"]);
+    }
+
+    #[test]
+    fn unknown_function_position_on_second_line() {
+        let (_, _, _, _, _, warnings) =
+            validate_sql_impl("SELECT 1\nFROM t\nWHERE x = zort(2)", &trino());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, "zort");
+        assert_eq!(warnings[0].1, Some(3));
+        assert_eq!(warnings[0].2, Some(11)); // "zort" in "WHERE x = zort(2)"
+    }
+
+    #[test]
+    fn function_checking_only_applies_to_trino() {
+        let (_, _, _, _, _, warnings) = validate_sql_impl("SELECT marh(1)", &SqlDialect::Generic);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn invalid_sql_produces_no_warnings() {
+        let (valid, _, _, _, _, warnings) = validate_sql_impl("SELECT marh(1 FORM", &trino());
+        assert!(!valid);
+        assert!(warnings.is_empty());
     }
 }

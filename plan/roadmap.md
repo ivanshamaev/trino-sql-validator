@@ -6,6 +6,12 @@
 - Wheels for Linux (x86_64, aarch64), macOS (arm64, x86_64), Windows (x86_64).
 - PyPI publishing via GitHub Actions + Trusted Publishing.
 
+## v0.2.0
+- Trino function-name validation: AST walk via `sqlparser::visitor`; unknown
+  functions are surfaced as non-fatal `FunctionWarning` in `ValidationResult.warnings`.
+  Catalog (459 names) auto-generated from Trino docs and committed in `src/functions.rs`.
+  Only active for `dialect="trino"`.
+
 ## v0.2.x — clearer Trino cursor
 - Enrich `TrinoDialect` overrides for commonly-mis-parsed Trino-specific syntax:
   - `EXECUTE IMMEDIATE`, `CALL` signatures
