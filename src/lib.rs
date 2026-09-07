@@ -42,7 +42,16 @@ static PREPARE_FROM_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 
 fn normalize_prepare_from(sql: &str) -> String {
-    PREPARE_FROM_PATTERN.replace(sql, "${1} AS").into()
+    PREPARE_FROM_PATTERN
+        .replace_all(sql, |captures: &regex::Captures<'_>| {
+            let matched = captures.get(0).unwrap().as_str();
+            let prefix = captures.get(1).unwrap().as_str();
+            format!(
+                "{prefix} AS{}",
+                " ".repeat(matched.len() - prefix.len() - 3)
+            )
+        })
+        .into()
 }
 
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {

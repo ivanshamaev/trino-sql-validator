@@ -241,3 +241,22 @@ def test_trino_only_functions_are_known() -> None:
         "bing_tile(x), json_format(z) FROM t"
     )
     assert result.warnings == ()
+
+
+def test_create_function_checks_return_type_and_body() -> None:
+    result = validate("CREATE FUNCTION f() RETURNS bignum RETURN marh(1)")
+    assert result.valid is True
+    assert result.unknown_types == ["bignum"]
+    assert result.unknown_functions == ["marh"]
+
+
+def test_trino_statement_rejects_unbalanced_groups() -> None:
+    result = validate("ALTER BRANCH b SET RETENTION (3")
+    assert result.valid is False
+
+
+def test_prepare_normalization_preserves_warning_columns() -> None:
+    result = validate("PREPARE p FROM SELECT marh(1)")
+    assert result.valid is True
+    assert result.unknown_functions == ["marh"]
+    assert result.warnings[0].column == 23

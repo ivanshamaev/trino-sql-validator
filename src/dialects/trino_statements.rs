@@ -1,4 +1,4 @@
-use sqlparser::ast::Statement;
+use sqlparser::ast::{CreateFunction, CreateFunctionBody, FunctionReturnType, Statement};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
@@ -132,7 +132,14 @@ fn consume_to_end(p: &mut Parser) -> Result<(), ParserError> {
     let mut depth: i64 = 0;
     loop {
         match p.peek_token_ref().token.clone() {
-            Token::EOF => return Ok(()),
+            Token::EOF => {
+                if depth == 0 {
+                    return Ok(());
+                }
+                return Err(ParserError::ParserError(
+                    "unterminated group in Trino statement".into(),
+                ));
+            }
             Token::SemiColon if depth == 0 => return Ok(()),
             Token::LParen | Token::LBracket | Token::LBrace => {
                 depth += 1;
@@ -340,22 +347,24 @@ fn parse_create_catalog(p: &mut Parser) -> Result<Statement, ParserError> {
     Ok(placeholder())
 }
 
-/// Trino's full `CREATE FUNCTION` body (comments, language, null-calling,
-/// determinism flags and a `RETURN` expression) goes beyond what sqlparser's
-/// `CREATE FUNCTION` support handles; accept the whole shape loosely.
 fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
     p.expect_keyword(Keyword::CREATE)?;
+    let mut or_replace = false;
     if opt_kw(p, Keyword::OR) {
         p.expect_keyword(Keyword::REPLACE)?;
+        or_replace = true;
     }
-    if opt_kw(p, Keyword::TEMPORARY) || opt_kw(p, Keyword::TEMP) {
-        // consumed
-    }
+    let temporary = if opt_kw(p, Keyword::TEMPORARY) {
+        true
+    } else {
+        opt_kw(p, Keyword::TEMP)
+    };
     p.expect_keyword(Keyword::FUNCTION)?;
-    p.parse_object_name(true)?;
+    let name = p.parse_object_name(true)?;
     p.expect_token(&Token::LParen)?;
     consume_balanced_parens(p)?;
     p.expect_keyword(Keyword::RETURNS)?;
+    let return_type = p.parse_data_type()?;
     // return type + any option clauses up to the mandatory `RETURN`
     // expression. `RETURNS` is a distinct keyword from `RETURN`, so scanning
     // for `RETURN` is unambiguous.
@@ -363,9 +372,28 @@ fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
         match p.peek_token_ref().token.clone() {
             Token::Word(w) if w.keyword == Keyword::RETURN => {
                 p.next_token();
-                consume_to_end(p)?;
+                let body = p.parse_expr()?;
                 end_of_statement(p)?;
-                return Ok(placeholder());
+                return Ok(Statement::CreateFunction(CreateFunction {
+                    or_alter: false,
+                    or_replace,
+                    temporary,
+                    if_not_exists: false,
+                    name,
+                    args: None,
+                    return_type: Some(FunctionReturnType::DataType(return_type)),
+                    function_body: Some(CreateFunctionBody::Return(body)),
+                    behavior: None,
+                    called_on_null: None,
+                    parallel: None,
+                    security: None,
+                    set_params: Vec::new(),
+                    using: None,
+                    language: None,
+                    determinism_specifier: None,
+                    options: None,
+                    remote_connection: None,
+                }));
             }
             Token::EOF | Token::SemiColon => {
                 return Err(ParserError::ParserError(
