@@ -41,6 +41,19 @@ static PREPARE_FROM_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?i)\b(PREPARE\s+[a-zA-Z_][a-zA-Z0-9_$]*)\s+FROM\b").unwrap()
 });
 
+static ARRAY_TYPE_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)(\bAS\s+ARRAY)\s*\(\s*[a-zA-Z_][a-zA-Z0-9_]*(?:\s+WITH\s+TIME\s+ZONE)?\s*\)",
+    )
+    .unwrap()
+});
+
+static TOP_QUALIFIED_IDENTIFIER_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\btop\s*(\.)").unwrap());
+
+static TOP_ALIAS_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)(\bAS\s+)top\b|(\))\s+top\b").unwrap());
+
 fn normalize_prepare_from(sql: &str) -> String {
     PREPARE_FROM_PATTERN
         .replace_all(sql, |captures: &regex::Captures<'_>| {
@@ -54,10 +67,38 @@ fn normalize_prepare_from(sql: &str) -> String {
         .into()
 }
 
+fn normalize_array_types(sql: &str) -> String {
+    ARRAY_TYPE_PATTERN
+        .replace_all(sql, |captures: &regex::Captures<'_>| {
+            let mut value = captures.get(0).unwrap().as_str().to_string();
+            if let Some(open) = value.rfind('(') {
+                value.replace_range(open..=open, "<");
+            }
+            if let Some(close) = value.rfind(')') {
+                value.replace_range(close..=close, ">");
+            }
+            value
+        })
+        .into()
+}
+
+fn normalize_top_identifiers(sql: &str) -> String {
+    let sql = TOP_QUALIFIED_IDENTIFIER_PATTERN.replace_all(sql, "\"top\"$1");
+    TOP_ALIAS_PATTERN
+        .replace_all(&sql, |captures: &regex::Captures<'_>| {
+            if let Some(prefix) = captures.get(1) {
+                format!("{}\"top\"", prefix.as_str())
+            } else {
+                ") \"top\"".to_string()
+            }
+        })
+        .into()
+}
+
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
     let parser = dialect.parser();
     let sql = if *dialect == SqlDialect::Trino {
-        normalize_prepare_from(sql)
+        normalize_top_identifiers(&normalize_array_types(&normalize_prepare_from(sql)))
     } else {
         sql.to_string()
     };
@@ -336,6 +377,17 @@ mod tests {
     fn trino_treats_backslash_as_string_content() {
         let (valid, _, _, _, _, _) = validate_sql_impl("SELECT 'ab\\\\cd'", &trino());
         assert!(valid);
+    }
+
+    #[test]
+    fn trino_accepts_array_parenthesis_type_syntax() {
+        for sql in [
+            "SELECT CAST(SPLIT(x, ',') AS ARRAY (BIGINT)) FROM t",
+            "WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[] AS ARRAY(VARCHAR)) UNION ALL SELECT id, CAST(ARRAY[id] AS ARRAY(VARCHAR)) FROM h) SELECT * FROM h",
+        ] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(valid, "expected to parse: {sql}");
+        }
     }
 
     #[test]

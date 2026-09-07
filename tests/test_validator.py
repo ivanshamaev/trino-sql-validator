@@ -331,3 +331,18 @@ def test_prepare_normalization_preserves_warning_columns() -> None:
     assert result.valid is True
     assert result.unknown_functions == ["marh"]
     assert result.warnings[0].column == 23
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[] AS ARRAY(VARCHAR)) UNION ALL SELECT id, CAST(ARRAY[id] AS ARRAY(VARCHAR)) FROM h) SELECT * FROM h",
+        "SELECT ClientOrderId, PaymentTypeId FROM (SELECT top.ClientOrderId, top.PaymentTypeId, ROW_NUMBER() OVER (PARTITION BY top.ClientOrderId ORDER BY top.StartTime DESC) AS rn FROM dwh_data.his AS top) top WHERE rn = 1",
+        "SELECT CAST(SPLIT(value, ',') AS ARRAY (BIGINT)) FROM source",
+        "SELECT id, path, level FROM (WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[1] AS array(bigint)) UNION ALL SELECT id, CAST((path || ARRAY[id]) AS array(bigint)) FROM h) SELECT *, CARDINALITY(path) - 1 AS level FROM h) AS tm",
+    ],
+)
+def test_reported_recursive_trino_queries_validate(sql: str) -> None:
+    result = validate(sql)
+    assert result.valid is True
+    assert result.statement_count == 1

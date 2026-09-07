@@ -91,6 +91,9 @@ impl Dialect for TrinoDialect {
     }
 
     fn is_reserved_for_identifier(&self, kw: Keyword) -> bool {
+        if kw == Keyword::TOP {
+            return false;
+        }
         GenericDialect::is_reserved_for_identifier(&GenericDialect {}, kw)
     }
 
@@ -99,10 +102,16 @@ impl Dialect for TrinoDialect {
     }
 
     fn is_table_alias(&self, kw: &Keyword, parser: &mut Parser) -> bool {
+        if *kw == Keyword::TOP {
+            return true;
+        }
         GenericDialect::is_table_alias(&GenericDialect {}, kw, parser)
     }
 
     fn is_table_factor_alias(&self, explicit: bool, kw: &Keyword, parser: &mut Parser) -> bool {
+        if *kw == Keyword::TOP {
+            return true;
+        }
         GenericDialect::is_table_factor_alias(&GenericDialect {}, explicit, kw, parser)
     }
 
