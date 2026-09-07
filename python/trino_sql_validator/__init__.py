@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from . import _native
 from ._native import validate as _native_validate
@@ -16,6 +17,7 @@ from ._native import validate_file as _native_validate_file
 __all__ = [
     "Error",
     "FunctionWarning",
+    "JinjaMode",
     "TypeWarning",
     "ValidationResult",
     "__version__",
@@ -41,6 +43,58 @@ message, line, column, warnings)."""
 __version__ = _native.__version__
 
 Dialect = str
+JinjaMode = Literal["auto", "mask", "reject"]
+
+
+def _mask_jinja(sql: str) -> str:
+    """Mask Jinja tags while preserving SQL length and line breaks."""
+    output = list(sql)
+    position = 0
+    quote: str | None = None
+    tags = (("{{", "}}"), ("{%", "%}"), ("{#", "#}"))
+    while position < len(sql):
+        character = sql[position]
+        if quote is not None:
+            if character == quote:
+                if position + 1 < len(sql) and sql[position + 1] == quote:
+                    position += 2
+                    continue
+                quote = None
+            elif character == "\\":
+                position += 2
+                continue
+            position += 1
+            continue
+        if character in ("'", '"'):
+            quote = character
+            position += 1
+            continue
+        tag = next((tag for tag in tags if sql.startswith(tag[0], position)), None)
+        if tag is None:
+            position += 1
+            continue
+        start, end = tag
+        close = sql.find(end, position + len(start))
+        if close == -1:
+            position += len(start)
+            continue
+        content = sql[position + len(start) : close]
+        expression = start == "{{" and not content.lstrip("- ").startswith("config")
+        for index in range(position, close + len(end)):
+            if output[index] not in "\r\n":
+                output[index] = " "
+        if expression:
+            output[position] = "j"
+        position = close + len(end)
+    return "".join(output)
+
+
+def _prepare_sql(sql: str, jinja: JinjaMode) -> str:
+    if jinja not in ("auto", "mask", "reject"):
+        raise ValueError("unknown jinja mode; expected 'auto', 'mask', or 'reject'")
+    if jinja == "reject":
+        return sql
+    return _mask_jinja(sql)
 
 
 @dataclass(frozen=True)
@@ -151,25 +205,36 @@ def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
     )
 
 
-def validate(sql: str, *, dialect: Dialect = "trino") -> ValidationResult:
+def validate(
+    sql: str, *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
+) -> ValidationResult:
     """Validate a SQL string containing one or more statements.
 
     Never raises for invalid SQL — errors are returned as a
     :class:`ValidationResult`. Raises :class:`ValueError` for an unknown
-    dialect. For the ``trino`` dialect the result also carries advisory
-    warnings for function calls and data types missing from the documented
-    catalog; these never affect ``valid``.
+    dialect or Jinja mode. By default, Jinja/dbt tags are masked before
+    parsing; use ``jinja="reject"`` to parse the original template strictly.
+    For the ``trino`` dialect the result also carries advisory warnings for
+    function calls and data types missing from the documented catalog; these
+    never affect ``valid``.
     """
-    return _validate(dialect, _native_validate(sql, dialect))
+    return _validate(dialect, _native_validate(_prepare_sql(sql, jinja), dialect))
 
 
 def validate_file(
-    path: str | os.PathLike[str], *, dialect: Dialect = "trino"
+    path: str | os.PathLike[str], *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
 ) -> ValidationResult:
     """Validate a UTF-8 SQL file containing one or more statements.
 
     Raises :class:`ValueError` if the file cannot be read (missing file,
-    decode failure) or the dialect is unknown. Invalid SQL is returned as a
-    :class:`ValidationResult`.
+    decode failure), the dialect is unknown, or the Jinja mode is invalid.
+    Invalid SQL is returned as a :class:`ValidationResult`.
     """
-    return _validate(dialect, _native_validate_file(os.fspath(path), dialect))
+    _prepare_sql("", jinja)
+    if jinja == "reject":
+        return _validate(dialect, _native_validate_file(os.fspath(path), dialect))
+    try:
+        with open(path, encoding="utf-8") as sql_file:
+            return validate(sql_file.read(), dialect=dialect, jinja=jinja)
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"failed to read SQL file {path!r}: {error}") from error

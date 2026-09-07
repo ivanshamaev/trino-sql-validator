@@ -260,7 +260,6 @@ def test_complex_trino_fixtures_validate_locally(filename: str, statement_count:
 @pytest.mark.parametrize(
     ("filename", "line", "column"),
     [
-        ("trino_dbt_customers.sql", 20, 10),
         ("trino_reports_tests_schema.sql", 14, 21),
     ],
 )
@@ -273,6 +272,27 @@ def test_complex_fixtures_preserve_documented_limitations(
     assert result.error is not None
     assert result.error.line == line
     assert result.error.column == column
+
+
+def test_dbt_jinja_fixture_validates_in_auto_mode() -> None:
+    result = validate_file(FIXTURES / "trino_dbt_customers.sql")
+    assert result.valid is True
+    assert result.statement_count == 1
+
+
+def test_jinja_reject_mode_preserves_strict_sql_behavior() -> None:
+    result = validate_file(FIXTURES / "trino_dbt_customers.sql", jinja="reject")
+    assert result.valid is False
+
+
+def test_clean_sql_is_unchanged_by_jinja_mode() -> None:
+    sql = "SELECT round(value) FROM source"
+    assert validate(sql).warnings == validate(sql, jinja="mask").warnings
+
+
+def test_unknown_jinja_mode_raises() -> None:
+    with pytest.raises(ValueError):
+        validate("SELECT 1", jinja="unsupported")  # type: ignore[arg-type]
 
 
 def test_create_function_checks_return_type_and_body() -> None:

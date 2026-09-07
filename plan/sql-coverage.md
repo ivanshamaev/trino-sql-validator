@@ -56,5 +56,10 @@ sorted by position.
   of the catalog walker.
 - Function/type presence is a name-existence check; arity, argument types,
   precision/scale and semantics are out of scope (syntax validator).
-- dbt/Jinja templates (`{{ var(...) }}`) are not SQL and are rejected; the same
-  SQL without templating validates.
+- dbt/Jinja templates are supported at the Python API boundary with the
+  default `jinja="auto"` mode. Tags are masked without shifting line/column
+  offsets, so expressions such as `{{ ref(...) }}` and `{{ var(...) }}` can be
+  checked together with surrounding SQL without installing dbt. Use
+  `jinja="reject"` for strict raw parsing, and validate dbt-rendered SQL when
+  control-flow blocks, macros, or adapter-specific semantics determine the
+  generated SQL shape.

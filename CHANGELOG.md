@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-07
+
+### Added
+
+- Added automatic Jinja/dbt template masking for `validate()` and
+  `validate_file()` via `jinja="auto"` or `jinja="mask"`.
+- Added strict `jinja="reject"` mode for validating unrendered templates as
+  raw SQL.
+- Added local regression coverage for dbt/Jinja SQL fixtures.
+
 ## [0.4.0] - 2026-09-07
 
 ### Fixed
