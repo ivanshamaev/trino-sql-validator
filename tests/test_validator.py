@@ -337,9 +337,9 @@ def test_prepare_normalization_preserves_warning_columns() -> None:
     "sql",
     [
         "WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[] AS ARRAY(VARCHAR)) UNION ALL SELECT id, CAST(ARRAY[id] AS ARRAY(VARCHAR)) FROM h) SELECT * FROM h",
-        "SELECT ClientOrderId, PaymentTypeId FROM (SELECT top.ClientOrderId, top.PaymentTypeId, ROW_NUMBER() OVER (PARTITION BY top.ClientOrderId ORDER BY top.StartTime DESC) AS rn FROM dwh_data.his AS top) top WHERE rn = 1",
+        "SELECT client_order_id, payment_type_id FROM (SELECT top.client_order_id, top.payment_type_id, ROW_NUMBER() OVER (PARTITION BY top.client_order_id ORDER BY top.start_time DESC) AS rn FROM dds_data.his AS top) top WHERE rn = 1",
         "SELECT CAST(SPLIT(value, ',') AS ARRAY (BIGINT)) FROM source",
-        "SELECT id, path, level FROM (WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[1] AS array(bigint)) UNION ALL SELECT id, CAST((path || ARRAY[id]) AS array(bigint)) FROM h) SELECT *, CARDINALITY(path) - 1 AS level FROM h) AS tm",
+        "SELECT id, path, level FROM (WITH RECURSIVE h(id, path) AS (SELECT 1, CAST(ARRAY[1] AS array(bigint)) UNION ALL SELECT id, CAST((path || ARRAY[id]) AS array(bigint)) FROM h) SELECT *, CARDINALITY(path) - 1 AS level FROM h) AS tm"
     ],
 )
 def test_reported_recursive_trino_queries_validate(sql: str) -> None:
@@ -357,3 +357,22 @@ def test_trino_rejects_clause_keyword_as_from_relation(sql: str) -> None:
 def test_trino_allows_quoted_clause_keyword_as_table_name() -> None:
     result = validate('SELECT a FROM "where"')
     assert result.valid is True
+
+
+def test_transformed_recursive_script_validates() -> None:
+    result = validate_file(FIXTURES / "trino_recursive_transformed.sql")
+    assert result.valid is True
+    assert result.statement_count == 4
+
+
+def test_sqlparser_merge_fixture_validates() -> None:
+    result = validate_file(FIXTURES / "sqlparser_merge_example.sql")
+    assert result.valid is True
+    assert result.statement_count == 1
+
+
+def test_iceberg_demo_fixture_reports_known_parser_limit() -> None:
+    result = validate_file(FIXTURES / "iceberg_trino_sqldemo.sql")
+    assert result.valid is False
+    assert result.error is not None
+    assert result.error.line == 216
