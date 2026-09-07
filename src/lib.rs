@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 
 use crate::dialects::SqlDialect;
 use sqlparser::parser::{Parser, ParserError};
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 pub mod dialects;
 pub mod functions;
@@ -95,8 +96,35 @@ fn normalize_top_identifiers(sql: &str) -> String {
         .into()
 }
 
+fn has_empty_from_clause(sql: &str, dialect: &dyn sqlparser::dialect::Dialect) -> bool {
+    let mut tokenizer = Tokenizer::new(dialect, sql);
+    let Ok(tokens) = tokenizer.tokenize() else {
+        return false;
+    };
+    let significant: Vec<&Token> = tokens
+        .iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .collect();
+    significant.windows(2).any(|pair| {
+        matches!(pair, [Token::Word(from), Token::Word(next)]
+            if from.keyword == sqlparser::keywords::Keyword::FROM
+                && next.quote_style.is_none()
+                && matches!(next.value.to_ascii_uppercase().as_str(), "WHERE" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "OFFSET" | "UNION" | "EXCEPT" | "INTERSECT"))
+    })
+}
+
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
     let parser = dialect.parser();
+    if *dialect == SqlDialect::Trino && has_empty_from_clause(sql, parser.as_ref()) {
+        return (
+            false,
+            0,
+            Some("sql parser error: FROM clause is missing a relation".to_string()),
+            None,
+            None,
+            Vec::new(),
+        );
+    }
     let sql = if *dialect == SqlDialect::Trino {
         normalize_top_identifiers(&normalize_array_types(&normalize_prepare_from(sql)))
     } else {

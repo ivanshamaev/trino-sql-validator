@@ -346,3 +346,14 @@ def test_reported_recursive_trino_queries_validate(sql: str) -> None:
     result = validate(sql)
     assert result.valid is True
     assert result.statement_count == 1
+
+
+@pytest.mark.parametrize("sql", ["SELECT a FROM WHERE", "SELECT a FROM GROUP", "SELECT a FROM ORDER"])
+def test_trino_rejects_clause_keyword_as_from_relation(sql: str) -> None:
+    result = validate(sql)
+    assert result.valid is False
+
+
+def test_trino_allows_quoted_clause_keyword_as_table_name() -> None:
+    result = validate('SELECT a FROM "where"')
+    assert result.valid is True
