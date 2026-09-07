@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -92,7 +93,9 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          attestations: true
+          # Rekor availability must not block package publication. The
+          # workflow still uses PyPI Trusted Publishing via OIDC.
+          attestations: false
           skip-existing: true
 
   github-release:
