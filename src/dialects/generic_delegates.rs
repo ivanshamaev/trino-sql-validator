@@ -27,7 +27,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_string_literal_backslash_escape(&self) -> bool {
-        true
+        false
     }
 
     fn parse_statement(&self, parser: &mut Parser) -> Option<Result<Statement, ParserError>> {

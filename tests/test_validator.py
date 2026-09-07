@@ -295,6 +295,25 @@ def test_unknown_jinja_mode_raises() -> None:
         validate("SELECT 1", jinja="unsupported")  # type: ignore[arg-type]
 
 
+def test_trino_accepts_literal_backslash() -> None:
+    result = validate(r"SELECT CAST('\' AS VARCHAR)")
+    assert result.valid is True
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH RECURSIVE tree AS (SELECT 1 AS id) SELECT * FROM tree",
+        "SELECT * FROM (WITH RECURSIVE tree AS (SELECT 1 AS id) SELECT * FROM tree) t",
+        "SELECT * FROM (WITH RECURSIVE tree(id) AS (SELECT 1) SELECT * FROM tree) t",
+    ],
+)
+def test_recursive_ctes_validate_in_nested_queries(sql: str) -> None:
+    result = validate(sql)
+    assert result.valid is True
+    assert result.statement_count == 1
+
+
 def test_create_function_checks_return_type_and_body() -> None:
     result = validate("CREATE FUNCTION f() RETURNS bignum RETURN marh(1)")
     assert result.valid is True

@@ -333,8 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn trino_accepts_string_backslash_escape() {
-        let (valid, _, _, _, _, _) = validate_sql_impl("SELECT 'ab\\'cd'", &trino());
+    fn trino_treats_backslash_as_string_content() {
+        let (valid, _, _, _, _, _) = validate_sql_impl("SELECT 'ab\\\\cd'", &trino());
         assert!(valid);
     }
 
