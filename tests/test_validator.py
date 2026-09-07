@@ -170,6 +170,64 @@ def test_function_checking_skipped_for_non_trino_dialect() -> None:
     assert result_hive.warnings == ()
 
 
+def test_known_types_produce_no_warnings() -> None:
+    result = validate(
+        "CREATE TABLE t (a bigint, b varchar, c decimal(10,2), d boolean, e int, "
+        "f double, g timestamp, h varbinary)"
+    )
+    assert result.valid is True
+    assert result.warnings == ()
+    assert result.unknown_types == []
+
+
+def test_unknown_type_in_column_definition_reports_warning() -> None:
+    result = validate("CREATE TABLE t (a bignum)")
+    assert result.valid is True
+    assert len(result.warnings) == 1
+    warning = result.warnings[0]
+    assert warning.name == "bignum"
+    assert warning.line == 1
+    assert result.unknown_types == ["bignum"]
+    assert result.unknown_functions == []
+
+
+def test_unknown_type_in_cast_reports_warning() -> None:
+    result = validate("SELECT CAST(x AS bignum) FROM t")
+    assert result.valid is True
+    assert result.unknown_types == ["bignum"]
+
+
+def test_unknown_type_in_view_and_alter() -> None:
+    result = validate(
+        "CREATE VIEW v AS SELECT CAST(x AS meep) FROM t; "
+        "ALTER TABLE t ADD COLUMN c zop; "
+        "ALTER TABLE t ALTER COLUMN c SET DATA TYPE woop"
+    )
+    assert result.valid is True
+    assert result.unknown_types == ["meep", "zop", "woop"]
+
+
+def test_type_checking_is_case_insensitive() -> None:
+    result = validate("CREATE TABLE t (a BigNum)")
+    assert result.unknown_types == ["bignum"]
+
+
+def test_type_warnings_are_distinct_from_function_warnings() -> None:
+    from trino_sql_validator import FunctionWarning, TypeWarning
+
+    result = validate("CREATE TABLE t (a bignum, b bigint); SELECT marh(1)")
+    assert result.unknown_types == ["bignum"]
+    assert result.unknown_functions == ["marh"]
+    assert isinstance(result.warnings[0], TypeWarning)
+    assert isinstance(result.warnings[1], FunctionWarning)
+
+
+def test_type_checking_skipped_for_non_trino_dialect() -> None:
+    result = validate("CREATE TABLE t (a bignum)", dialect="generic")
+    assert result.valid is True
+    assert result.warnings == ()
+
+
 def test_invalid_sql_has_no_warnings() -> None:
     result = validate("SELECT marh(1 FORM")
     assert result.valid is False

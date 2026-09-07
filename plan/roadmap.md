@@ -12,6 +12,22 @@
   Catalog (459 names) auto-generated from Trino docs and committed in `src/functions.rs`.
   Only active for `dialect="trino"`.
 
+## v0.3.0 — Trino statement coverage + data-type validation
+- `TrinoDialect` now handles the Trino-only statement surface from
+  `docs/src/main/sphinx/sql` (85/85 gap corpus passing): catalog/branch/function
+  DDL, `ALTER TABLE/VIEW/MATERIALIZED VIEW`, `RESET SESSION`, `SET PATH`,
+  `SHOW CREATE ...`, `DESCRIBE INPUT/OUTPUT`, role `GRANT`/`REVOKE`, `PREPARE
+  [name] FROM` normalization. See `plan/sql-coverage.md`.
+- Warning tuple widened to `(kind, name, line, column)` where `kind` is
+  `"function"` or `"type"`; new `TypeWarning` + `ValidationResult.unknown_types`
+  validate data-type names against a generated `src/types.rs` catalog
+  (`tools/extract_types.py`).
+- `CREATE FUNCTION`, `DESCRIBE INPUT/OUTPUT` and `RESET SESSION` handled
+  strictly (no permissive sqlparser fallback).
+- Known accepted limitation: `${...}`/`{{...}}` templates and sqlparser's
+  `array(...)`/deeply-nested-`row(...)` gaps remain (documented in
+  `plan/sql-coverage.md`).
+
 ## v0.2.x — clearer Trino cursor
 - Enrich `TrinoDialect` overrides for commonly-mis-parsed Trino-specific syntax:
   - `EXECUTE IMMEDIATE`, `CALL` signatures

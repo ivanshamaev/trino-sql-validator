@@ -33,22 +33,28 @@ Invalid SQL (and files containing it) is returned as a `ValidationResult`;
 it is **not** raised as an exception. Only genuine misuse (unknown dialect,
 unreadable file) raises.
 
-### Function-name warnings
+### Catalog warnings (functions and data types)
 
-For `dialect="trino"`, `validate()` also checks that every function called in
-the SQL exists in the documented Trino catalog. Unknown names are reported as
-non-fatal `warnings` — `valid` stays `True` because syntax is fine:
+For `dialect="trino"`, `validate()` also checks that every function called and
+every data type used in the SQL exists in the documented Trino catalog. Unknown
+names are reported as non-fatal `warnings` — `valid` stays `True` because syntax
+is fine:
 
 ```python
-result = validate("SELECT marh(1.5)")      # round() misspelled
+result = validate("SELECT marh(1.5)")       # round() misspelled
 assert result.valid
-print(result.warnings)                     # (FunctionWarning(name='marh', line=1, column=8),)
-print(result.unknown_functions)            # ['marh']
+print(result.warnings)                      # (FunctionWarning(name='marh', line=1, column=8),)
+print(result.unknown_functions)             # ['marh']
+
+result = validate("CREATE TABLE t (a bignum, b bigint)")  # bigint vs bignum
+print(result.warnings[0])                   # TypeWarning(name='bignum', line=1, column=19)
+print(result.unknown_types)                 # ['bignum']
 ```
 
-The catalog is auto-generated from the Trino docs and only checks *name
-existence*, not argument count or types. `hive`/`generic` dialects skip this
-check.
+The catalogs are auto-generated from the Trino docs and only check *name
+existence*, not argument counts, precision/scale, or semantic correctness.
+`hive`/`generic` dialects skip these checks. False positives are possible if a
+deployed Trino adds plugin functions/types beyond the docs.
 
 ### Dialects
 
@@ -61,8 +67,12 @@ check.
 `sqlparser-rs` (the parser we use) performs **syntax** validation, not semantic
 analysis. It may accept SQL that Trino would reject at analysis time (unknown
 columns/tables, duplicate columns), and it can reject exotic Trino-specific DDL.
-For the overwhelming majority of SELECT/DDL statements the results are accurate.
-See [`plan/roadmap.md`](plan/roadmap.md) for the path toward stricter Trino fidelity.
+In particular, Trino's `array(...)` component-type syntax and deeply nested
+`row(...)` types (e.g. `row(a row(b bigint))` or `array(row(x bigint))`) are not
+parsed by sqlparser, which only understands `array<...>`/`map(...)`/`row(...)`
+at certain nesting levels. For the overwhelming majority of SELECT/DDL statements
+the results are accurate. See [`plan/roadmap.md`](plan/roadmap.md) for the path
+toward stricter Trino fidelity.
 
 ## Development
 

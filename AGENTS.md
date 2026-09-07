@@ -50,9 +50,11 @@ mypy python/trino_sql_validator
 maturin build --release          # wheels
 maturin sdist                    # source distribution
 
-# Regenerate the Trino function catalog from upstream docs
-python tools/extract_functions.py            # fetch from GitHub
+# Regenerate the Trino function/type catalogs from upstream docs
+python tools/extract_functions.py            # fetch from GitHub (-> src/functions.rs)
 python tools/extract_functions.py --docs-path /path/to/trino/docs/src/main/sphinx/functions  # local checkout
+python tools/extract_types.py                # fetch from GitHub (-> src/types.rs)
+python tools/extract_types.py --docs-path /path/to/trino  # local checkout
 ```
 
 ## Conventions / rules

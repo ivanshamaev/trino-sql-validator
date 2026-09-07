@@ -2,7 +2,7 @@ from typing import TypeAlias
 
 __version__: str
 
-_Warning: TypeAlias = tuple[str, int | None, int | None]
+_Warning: TypeAlias = tuple[str, str, int | None, int | None]
 
 def validate(
     sql: str,

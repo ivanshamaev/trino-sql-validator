@@ -3,6 +3,10 @@ use pyo3::PyErr;
 
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect};
 
+pub mod trino_statements;
+
+mod generic_delegates;
+
 /// SQL dialects supported by the validator.
 ///
 /// `Trino` is the focus; `Hive` and `Generic` are offered as permissive
@@ -45,30 +49,14 @@ impl SqlDialect {
 /// A `sqlparser` dialect tuned for Trino (Presto-family) syntax.
 ///
 /// Trino has no dedicated upstream dialect, so this is a thin override on top
-/// of [`GenericDialect`] that enforces Trino-specific lexing rules. The most
-/// impactful difference today: Trino rejects backquoted identifiers (it allows
-/// only double-quoted identifiers), whereas Generic/Hive accept backticks.
-/// More overrides should be added here as gaps are found — see `plan/roadmap.md`.
+/// of [`GenericDialect`]. Behaviour matches `GenericDialect` for every trait
+/// hook (see [`dialects::generic_delegates`]) except for the Trino-specific
+/// lexing rules and statement parsing ([`trino_statements`]). The most
+/// impactful lexing difference today: Trino rejects backquoted identifiers (it
+/// allows only double-quoted identifiers), whereas Generic/Hive accept
+/// backticks. The actual [`Dialect`] impl lives in `generic_delegates.rs`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TrinoDialect;
-
-impl Dialect for TrinoDialect {
-    fn is_delimited_identifier_start(&self, ch: char) -> bool {
-        ch == '"'
-    }
-
-    fn is_identifier_start(&self, ch: char) -> bool {
-        ch.is_alphabetic() || ch == '_'
-    }
-
-    fn is_identifier_part(&self, ch: char) -> bool {
-        ch.is_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '$'
-    }
-
-    fn supports_string_literal_backslash_escape(&self) -> bool {
-        true
-    }
-}
 
 #[cfg(test)]
 mod tests {
