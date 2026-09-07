@@ -243,6 +243,38 @@ def test_trino_only_functions_are_known() -> None:
     assert result.warnings == ()
 
 
+@pytest.mark.parametrize(
+    ("filename", "statement_count"),
+    [
+        ("trino_reports_optimize.sql", 17),
+        ("trino_iris_queries.sql", 18),
+        ("trino_tpch_queries.sql", 39),
+    ],
+)
+def test_complex_trino_fixtures_validate_locally(filename: str, statement_count: int) -> None:
+    result = validate_file(FIXTURES / filename)
+    assert result.valid is True
+    assert result.statement_count == statement_count
+
+
+@pytest.mark.parametrize(
+    ("filename", "line", "column"),
+    [
+        ("trino_dbt_customers.sql", 20, 10),
+        ("trino_reports_tests_schema.sql", 14, 21),
+    ],
+)
+def test_complex_fixtures_preserve_documented_limitations(
+    filename: str, line: int, column: int
+) -> None:
+    result = validate_file(FIXTURES / filename)
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.error is not None
+    assert result.error.line == line
+    assert result.error.column == column
+
+
 def test_create_function_checks_return_type_and_body() -> None:
     result = validate("CREATE FUNCTION f() RETURNS bignum RETURN marh(1)")
     assert result.valid is True
