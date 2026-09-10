@@ -64,9 +64,6 @@ static ICEBERG_VERSION_PATTERN: LazyLock<regex::Regex> =
 static ICEBERG_TIMESTAMP_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR(\s+TIMESTAMP\s+AS\s+OF\b)").unwrap());
 
-static ICEBERG_BRANCH_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)@\s*[a-zA-Z_][a-zA-Z0-9_$]*").unwrap());
-
 static ICEBERG_NAMED_VERSION_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)(\bVERSION\s+AS\s+OF)\s+'[^']*'").unwrap());
 
@@ -141,10 +138,6 @@ fn normalize_iceberg_timestamp_as_of(sql: &str) -> String {
     ICEBERG_TIMESTAMP_PATTERN.replace_all(sql, "   $1").into()
 }
 
-fn normalize_iceberg_branch_references(sql: &str) -> String {
-    ICEBERG_BRANCH_PATTERN.replace_all(sql, "").into()
-}
-
 fn normalize_iceberg_named_versions(sql: &str) -> String {
     ICEBERG_NAMED_VERSION_PATTERN
         .replace_all(sql, "$1 0")
@@ -212,12 +205,10 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
     }
     let sql = if *dialect == SqlDialect::Trino {
         normalize_top_identifiers(&normalize_ipaddress_literals(
-            &normalize_iceberg_named_versions(&normalize_iceberg_branch_references(
-                &normalize_iceberg_timestamp_as_of(&normalize_iceberg_version_as_of(
-                    &normalize_function_values(&normalize_array_values(&normalize_typed_values(
-                        &normalize_scalar_values(&normalize_array_types(&normalize_prepare_from(
-                            sql,
-                        ))),
+            &normalize_iceberg_named_versions(&normalize_iceberg_timestamp_as_of(
+                &normalize_iceberg_version_as_of(&normalize_function_values(
+                    &normalize_array_values(&normalize_typed_values(&normalize_scalar_values(
+                        &normalize_array_types(&normalize_prepare_from(sql)),
                     ))),
                 )),
             )),
@@ -550,6 +541,112 @@ mod tests {
             validate_sql_impl("SELECT * FROM customer FOR VERSION AS OF 1", &trino());
         assert!(valid);
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn trino_accepts_with_session() {
+        for sql in [
+            "WITH SESSION query_max_execution_time = '2h' SELECT * FROM orders",
+            "WITH SESSION example.query_partition_filter_required = true, query_max_memory = 1 + 2 SELECT marh(id) FROM orders",
+            "WITH SESSION x = ARRAY[1, 2] WITH t AS (SELECT 1 AS id) SELECT * FROM t",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            if sql.contains("marh") {
+                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings[0].1, "marh");
+                assert_eq!(warnings[0].3, sql.find("marh").map(|index| index + 1));
+            } else {
+                assert!(warnings.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn trino_rejects_malformed_with_session() {
+        for sql in [
+            "WITH SESSION SELECT 1",
+            "WITH SESSION query_max_memory SELECT 1",
+            "WITH SESSION query_max_memory = SELECT 1",
+            "WITH SESSION query_max_memory = 1, SELECT 1",
+        ] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn trino_accepts_iceberg_dml_branch_references() {
+        for sql in [
+            "INSERT INTO customer @ dev (id) VALUES (1)",
+            "DELETE FROM customer @ dev WHERE id = 1",
+            "UPDATE catalog.schema.customer @ dev SET id = 1",
+            "MERGE INTO target @ dev USING source ON target.id = source.id WHEN MATCHED THEN DELETE",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn trino_does_not_treat_arbitrary_at_words_as_branch_references() {
+        for sql in ["@select", "SELECT @branch", "DELETE @ branch"] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn trino_rejects_invalid_identifier_shapes() {
+        for sql in ["SELECT 1x FROM dual", "SELECT \"\"", "SELECT * FROM \"\""] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+        for sql in ["SELECT 1 x FROM dual", "SELECT \"1x\"", "SELECT ''"] {
+            let (valid, _, message, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+        }
+    }
+
+    #[test]
+    fn trino_accepts_non_decimal_integer_literals() {
+        for sql in [
+            "SELECT 0X123_ABC_DEF",
+            "SELECT -0x123_abc_def",
+            "SELECT 0O012_345",
+            "SELECT -0o012_345",
+            "SELECT 0B110_010",
+            "SELECT -0b110_010",
+        ] {
+            let (valid, _, message, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+        }
+        for sql in ["SELECT 0X123_G", "SELECT 0O018", "SELECT 0B102"] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn trino_branch_normalization_preserves_source_positions() {
+        for sql in [
+            "UPDATE customer @ dev SET score = marh(1)",
+            "SELECT '@branch', marh(1)",
+            "SELECT 1 -- @branch\n, marh(1)",
+        ] {
+            let (valid, _, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(warnings.len(), 1);
+            assert_eq!(warnings[0].1, "marh");
+            let prefix = &sql[..sql.find("marh").unwrap()];
+            let expected_line = prefix.matches('\n').count() + 1;
+            let expected_column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
+            assert_eq!(warnings[0].2, Some(expected_line));
+            assert_eq!(warnings[0].3, Some(expected_column));
+        }
     }
 
     #[test]

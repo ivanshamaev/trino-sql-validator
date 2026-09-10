@@ -19,11 +19,11 @@ impl Dialect for TrinoDialect {
     }
 
     fn is_identifier_start(&self, ch: char) -> bool {
-        ch.is_alphabetic() || ch == '_'
+        ch.is_ascii_alphabetic() || ch == '_'
     }
 
     fn is_identifier_part(&self, ch: char) -> bool {
-        ch.is_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '$'
+        ch.is_ascii_alphanumeric() || ch == '_'
     }
 
     fn supports_string_literal_backslash_escape(&self) -> bool {
@@ -440,7 +440,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_numeric_literal_underscores(&self) -> bool {
-        GenericDialect::supports_numeric_literal_underscores(&GenericDialect {})
+        true
     }
 
     fn supports_numeric_prefix(&self) -> bool {

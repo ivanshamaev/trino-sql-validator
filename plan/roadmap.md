@@ -52,6 +52,22 @@
   SESSION`, inline `WITH FUNCTION`, `PIVOT ... GROUP BY`, `CORRESPONDING`, and
   `NEAREST`.
 
+## v0.11.0 — parser-fidelity hardening
+- Added a reproducible differential audit of direct-string tests from pinned
+  Trino 483 and PrestoDB 0.299 parser corpora. The Trino corpus is the fidelity
+  target; PrestoDB is a comparison only and must not expand the dialect.
+- Replaced unsafe global branch rewriting with token-aware Iceberg DML branch
+  handling, tightened Trino lexical checks, and added Trino non-decimal integer
+  literals.
+- Added `WITH SESSION`, current catalog/branch forms, strict property and path
+  validation, session authorization checks, and `SHOW ... LIKE ... ESCAPE` /
+  `SHOW FUNCTIONS FROM/IN` forms.
+- The pinned audit now rejects all 23 direct negative statements and accepts
+  354 of 456 extracted positive statements. Remaining gaps are explicit:
+  inline `WITH FUNCTION`, `PIVOT ... GROUP BY`, `CORRESPONDING`, `NEAREST`,
+  broader statement grammar, expressions, types, and SQL routine bodies. See
+  `plan/v0.11.0_SqlParser.md`.
+
 ## Next — clearer Trino cursor
 - Enrich `TrinoDialect` overrides for remaining commonly misparsed Trino-specific
   syntax and broaden negative/source-position regression coverage.

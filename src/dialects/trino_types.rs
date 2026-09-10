@@ -375,6 +375,262 @@ fn normalize_match_recognize_subsets(tokens: &mut [TokenWithSpan]) {
     }
 }
 
+fn is_root_query_start(token: &TokenWithSpan) -> bool {
+    matches!(token.token, Token::LParen)
+        || ["select", "table", "values", "with"]
+            .iter()
+            .any(|word| is_unquoted_word(token, word))
+}
+
+fn consume_qualified_name(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
+    let mut cursor = start;
+    if !is_identifier(&tokens[cursor]) {
+        return None;
+    }
+    loop {
+        let period = next_significant(tokens, cursor + 1, end);
+        let Some(period) = period else {
+            return Some(cursor + 1);
+        };
+        if tokens[period].token != Token::Period {
+            return Some(cursor + 1);
+        }
+        cursor = next_significant(tokens, period + 1, end)?;
+        if !is_identifier(&tokens[cursor]) {
+            return None;
+        }
+    }
+}
+
+fn session_property_value_end(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut value = false;
+    for (index, token_with_span) in tokens.iter().enumerate().take(end).skip(start) {
+        let token = &token_with_span.token;
+        if matches!(token, Token::Whitespace(_)) {
+            continue;
+        }
+        if depth == 0
+            && value
+            && (matches!(token, Token::Comma) || is_root_query_start(&tokens[index]))
+        {
+            return Some(index);
+        }
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+        value = true;
+    }
+    None
+}
+
+fn session_property_value_is_valid(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    dialect: &dyn Dialect,
+) -> bool {
+    let value = tokens[start..end]
+        .iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_)))
+        .map(|token| token.token.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    !value.is_empty() && Parser::parse_sql(dialect, &format!("SELECT {value}")).is_ok()
+}
+
+fn with_session_query_start(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    dialect: &dyn Dialect,
+) -> Option<usize> {
+    let with = next_significant(tokens, start, end)?;
+    if !is_unquoted_word(&tokens[with], "with") {
+        return None;
+    }
+    let session = next_significant(tokens, with + 1, end)?;
+    if !is_unquoted_word(&tokens[session], "session") {
+        return None;
+    }
+    let mut property = next_significant(tokens, session + 1, end)?;
+    loop {
+        let after_name = consume_qualified_name(tokens, property, end)?;
+        let equals = next_significant(tokens, after_name, end)?;
+        if tokens[equals].token != Token::Eq {
+            return None;
+        }
+        let value_start = next_significant(tokens, equals + 1, end)?;
+        let value_end = session_property_value_end(tokens, value_start, end)?;
+        if !session_property_value_is_valid(tokens, value_start, value_end, dialect) {
+            return None;
+        }
+        if tokens[value_end].token == Token::Comma {
+            property = next_significant(tokens, value_end + 1, end)?;
+            continue;
+        }
+        return is_root_query_start(&tokens[value_end]).then_some(value_end);
+    }
+}
+
+fn normalize_with_session(tokens: &mut [TokenWithSpan], dialect: &dyn Dialect) {
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        if let Some(query_start) = with_session_query_start(tokens, start, end, dialect) {
+            blank_non_whitespace(tokens, start, query_start);
+        }
+        start = end.saturating_add(1);
+    }
+}
+
+fn dml_target_start(tokens: &[TokenWithSpan], at: usize) -> Option<usize> {
+    let statement = statement_start(tokens, at);
+    let first = next_significant(tokens, statement, at)?;
+    let after_first = next_significant(tokens, first + 1, at)?;
+    if is_unquoted_word(&tokens[first], "update") {
+        return Some(after_first);
+    }
+    let expected = if is_unquoted_word(&tokens[first], "insert")
+        || is_unquoted_word(&tokens[first], "merge")
+    {
+        "into"
+    } else if is_unquoted_word(&tokens[first], "delete") {
+        "from"
+    } else {
+        return None;
+    };
+    if !is_unquoted_word(&tokens[after_first], expected) {
+        return None;
+    }
+    next_significant(tokens, after_first + 1, at)
+}
+
+fn is_qualified_name(tokens: &[TokenWithSpan], start: usize, end: usize) -> bool {
+    let mut expect_word = true;
+    let mut consumed = false;
+    for token in &tokens[start..end] {
+        if matches!(token.token, Token::Whitespace(_)) {
+            continue;
+        }
+        if expect_word {
+            if !matches!(token.token, Token::Word(_)) {
+                return false;
+            }
+            consumed = true;
+        } else if token.token != Token::Period {
+            return false;
+        }
+        expect_word = !expect_word;
+    }
+    consumed && !expect_word
+}
+
+fn is_branch_identifier(token: &TokenWithSpan, dialect: &dyn Dialect) -> bool {
+    let Token::Word(word) = &token.token else {
+        return false;
+    };
+    match word.quote_style {
+        Some('"') => !word.value.is_empty(),
+        Some(_) => false,
+        None => !dialect.is_reserved_for_identifier(word.keyword),
+    }
+}
+
+fn normalize_iceberg_branch_references(tokens: &mut [TokenWithSpan], dialect: &dyn Dialect) {
+    for at in 0..tokens.len() {
+        if tokens[at].token != Token::AtSign {
+            continue;
+        }
+        let Some(target) = dml_target_start(tokens, at) else {
+            continue;
+        };
+        if !is_qualified_name(tokens, target, at) {
+            continue;
+        }
+        let Some(branch) = next_significant(tokens, at + 1, tokens.len()) else {
+            continue;
+        };
+        if !is_branch_identifier(&tokens[branch], dialect) {
+            continue;
+        }
+        tokens[at].token = Token::Whitespace(Whitespace::Space);
+        tokens[branch].token = Token::Whitespace(Whitespace::Space);
+    }
+}
+
+fn is_digit_sequence(value: &str, predicate: impl Fn(char) -> bool) -> bool {
+    let mut expect_digit = true;
+    for character in value.chars() {
+        if expect_digit {
+            if !predicate(character) {
+                return false;
+            }
+        } else if character != '_' && !predicate(character) {
+            return false;
+        }
+        expect_digit = character == '_';
+    }
+    !expect_digit && !value.is_empty()
+}
+
+fn is_trino_non_decimal_integer(word: &str) -> bool {
+    let Some((prefix, digits)) = word.split_at_checked(1) else {
+        return false;
+    };
+    match prefix.to_ascii_uppercase().as_str() {
+        "X" => is_digit_sequence(digits, |character| character.is_ascii_hexdigit()),
+        "O" => is_digit_sequence(digits, |character| matches!(character, '0'..='7')),
+        "B" => is_digit_sequence(digits, |character| matches!(character, '0' | '1')),
+        _ => false,
+    }
+}
+
+fn normalize_trino_non_decimal_integer_literals(tokens: &mut [TokenWithSpan]) {
+    for index in 0..tokens.len().saturating_sub(1) {
+        let (left, right) = (&tokens[index], &tokens[index + 1]);
+        let is_literal = matches!(
+            (&left.token, &right.token),
+            (Token::Number(value, false), Token::Word(word))
+                if value == "0"
+                    && word.quote_style.is_none()
+                    && left.span.end == right.span.start
+                    && is_trino_non_decimal_integer(&word.value)
+        );
+        if is_literal {
+            tokens[index + 1].token = Token::Whitespace(Whitespace::Space);
+        }
+    }
+}
+
+fn validate_trino_identifiers(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for token in tokens {
+        if matches!(
+            &token.token,
+            Token::Word(word) if word.quote_style == Some('"') && word.value.is_empty()
+        ) {
+            return Err(ParserError::ParserError(format!(
+                "Zero-length delimited identifier not allowed at Line: {}, Column: {}",
+                token.span.start.line, token.span.start.column
+            )));
+        }
+    }
+    for pair in tokens.windows(2) {
+        if matches!(pair[0].token, Token::Number(_, _))
+            && matches!(pair[1].token, Token::Word(_))
+            && pair[0].span.end == pair[1].span.start
+        {
+            return Err(ParserError::ParserError(format!(
+                "identifiers must not start with a digit at Line: {}, Column: {}",
+                pair[0].span.start.line, pair[0].span.start.column
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn is_in_create_type_declaration(tokens: &[TokenWithSpan], index: usize) -> bool {
     let start = statement_start(tokens, index);
     let Some(first) = next_significant(tokens, start, index) else {
@@ -508,6 +764,15 @@ fn normalize_nested_row_types(tokens: &mut [TokenWithSpan]) {
 
 pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<Vec<Statement>, ParserError> {
     let mut tokens = Tokenizer::new(dialect, sql).tokenize_with_location()?;
+    normalize_trino_non_decimal_integer_literals(&mut tokens);
+    validate_trino_identifiers(&tokens)?;
+    normalize_iceberg_branch_references(&mut tokens, dialect);
+    if let Some(token) = tokens.iter().find(|token| token.token == Token::AtSign) {
+        return Err(ParserError::ParserError(format!(
+            "unexpected @ outside an Iceberg DML branch reference at Line: {}, Column: {}",
+            token.span.start.line, token.span.start.column
+        )));
+    }
     let parsed = Parser::new(dialect)
         .with_tokens_with_locations(tokens.clone())
         .parse_statements();
@@ -516,6 +781,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<Vec<Statemen
     }
     normalize_materialized_view_options(&mut tokens);
     normalize_match_recognize_subsets(&mut tokens);
+    normalize_with_session(&mut tokens, dialect);
     normalize_nested_row_types(&mut tokens);
     Parser::new(dialect)
         .with_tokens_with_locations(tokens)

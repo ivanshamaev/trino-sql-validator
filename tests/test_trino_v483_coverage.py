@@ -49,6 +49,12 @@ SUPPORTED_SQL = {
         )
     """,
     "group_by_auto": "SELECT mktsegment, sum(acctbal) FROM shipping GROUP BY AUTO",
+    "with_session": """
+        WITH SESSION
+            query_max_execution_time = '2h',
+            example.query_partition_filter_required = true
+        SELECT * FROM example.default.thetable LIMIT 100
+    """,
     "fetch_with_ties": "SELECT * FROM nation ORDER BY name FETCH FIRST 5 ROWS WITH TIES",
     "limit_all": "SELECT * FROM nation LIMIT ALL",
     "tablesample": "SELECT * FROM nation TABLESAMPLE BERNOULLI (10)",
@@ -140,12 +146,6 @@ SUPPORTED_SQL = {
 }
 
 DOCUMENTED_PARSER_GAPS = {
-    "with_session": """
-        WITH SESSION
-            query_max_execution_time = '2h',
-            example.query_partition_filter_required = true
-        SELECT * FROM example.default.thetable LIMIT 100
-    """,
     "with_function": """
         WITH
             FUNCTION hello(name VARCHAR)
@@ -212,7 +212,7 @@ def test_documented_trino_483_supported_syntax(feature: str, sql: str) -> None:
     assert result.warnings == (), f"{feature}: {result.warnings}"
 
 
-@pytest.mark.xfail(strict=True, reason="documented Trino 483 parser gap planned for v0.10.0")
+@pytest.mark.xfail(strict=True, reason="documented Trino 483 parser gap planned for v0.11.0")
 @pytest.mark.parametrize(
     ("feature", "sql"), DOCUMENTED_PARSER_GAPS.items(), ids=DOCUMENTED_PARSER_GAPS
 )

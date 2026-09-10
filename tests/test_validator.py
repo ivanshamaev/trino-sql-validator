@@ -378,3 +378,128 @@ def test_nested_row_fixture_validates() -> None:
     assert result.statement_count == 6
     assert result.error is None
     assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO customer @ dev (id) VALUES (1)",
+        "DELETE FROM customer @ dev WHERE id = 1",
+        "UPDATE catalog.schema.customer @ dev SET id = 1",
+        (
+            "MERGE INTO target @ dev USING source ON target.id = source.id "
+            "WHEN MATCHED THEN DELETE"
+        ),
+    ],
+)
+def test_iceberg_dml_branch_references_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+
+
+@pytest.mark.parametrize("sql", ["@select", "SELECT @branch", "DELETE @ branch"])
+def test_arbitrary_at_words_are_not_removed(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE customer @ dev SET score = marh(1)",
+        "SELECT '@branch', marh(1)",
+        "SELECT 1 -- @branch\n, marh(1)",
+    ],
+)
+def test_branch_normalization_preserves_warning_position(sql: str) -> None:
+    result = validate(sql)
+    prefix = sql[: sql.index("marh")]
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh"]
+    assert result.warnings[0].line == prefix.count("\n") + 1
+    assert result.warnings[0].column == len(prefix.rsplit("\n", maxsplit=1)[-1]) + 1
+
+
+@pytest.mark.parametrize("identifier", ["имя", "foo$bar"])
+def test_trino_rejects_non_ascii_or_dollar_unquoted_identifier(identifier: str) -> None:
+    assert validate(f"SELECT {identifier}").valid is False
+    assert validate(f'SELECT "{identifier}"').valid is True
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1x FROM dual", 'SELECT ""', 'SELECT * FROM ""'])
+def test_trino_rejects_invalid_identifier_shapes(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1 x FROM dual", 'SELECT "1x"', "SELECT ''"])
+def test_valid_literals_aliases_and_quoted_identifiers_remain_valid(sql: str) -> None:
+    assert validate(sql).valid is True
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 0X123_ABC_DEF",
+        "SELECT -0x123_abc_def",
+        "SELECT 0O012_345",
+        "SELECT -0o012_345",
+        "SELECT 0B110_010",
+        "SELECT -0b110_010",
+    ],
+)
+def test_trino_accepts_non_decimal_integer_literals(sql: str) -> None:
+    assert validate(sql).valid is True
+
+
+@pytest.mark.parametrize("sql", ["SELECT 0X123_G", "SELECT 0O018", "SELECT 0B102"])
+def test_trino_rejects_malformed_non_decimal_integer_literals(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE CATALOG IF NOT EXISTS hive USING hive WITH (\"hive.metastore.uri\" = 'thrift://host:9083')",
+        "CREATE CATALOG test USING conn COMMENT 'awesome' AUTHORIZATION ROLE dragon WITH (\"a\" = 'apple', \"b\" = 123)",
+        "DROP CATALOG IF EXISTS hive RESTRICT",
+        "ALTER TABLE orders SET PROPERTIES format = 'ORC', partitioned_by = ARRAY['ds']",
+        "ALTER MATERIALIZED VIEW daily_orders SET PROPERTIES refresh_interval = '1h'",
+        "SET PATH analytics, hive.default",
+        "SET SESSION AUTHORIZATION 'analyst'",
+        "EXPLAIN ANALYZE VERBOSE SELECT * FROM orders",
+        "SHOW CATALOGS LIKE '%$_%' ESCAPE '$'",
+        "SHOW SCHEMAS IN hive LIKE '%$_%' ESCAPE '$'",
+        "SHOW TABLES FROM hive.default LIKE '%$_%' ESCAPE '$'",
+        "SHOW COLUMNS FROM hive.default.orders LIKE '%$_%' ESCAPE '$'",
+        "SHOW FUNCTIONS FROM hive.default LIKE '%$_%' ESCAPE '$'",
+        "SHOW SESSION LIKE '%$_%' ESCAPE '$'",
+    ],
+)
+def test_current_trino_statement_forms_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE OR REPLACE CATALOG hive USING hive",
+        "CREATE CATALOG hive USING hive (x = 1)",
+        "CREATE OR REPLACE BRANCH IF NOT EXISTS audit IN TABLE orders",
+        "DROP BRANCH audit",
+        "ALTER TABLE orders SET PROPERTIES (format = 'ORC')",
+        "ALTER MATERIALIZED VIEW daily_orders SET PROPERTIES (refresh_interval = '1h')",
+        "ALTER VIEW daily_orders SET PROPERTIES refresh_interval = '1h'",
+        "SET PATH one.too.many, qualifiers",
+        "SET SESSION AUTHORIZATION null",
+        "EXPLAIN VERBOSE SELECT * FROM orders",
+        "SHOW SESSION LIKE '%$_%' ESCAPE",
+        "SHOW COLUMNS orders",
+    ],
+)
+def test_trino_statement_false_accepts_are_rejected(sql: str) -> None:
+    assert validate(sql).valid is False

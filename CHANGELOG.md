@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-10
+
+### Added
+
+- Added a reproducible audit tool for pinned Trino 483 and PrestoDB 0.299 parser
+  test corpora, plus a detailed parser-fidelity plan for future work.
+- Added Trino `WITH SESSION` queries with multiple expression-valued session
+  properties while preserving function-warning source locations.
+- Added syntax support for hexadecimal, octal, and binary integer literals with
+  Trino digit separators.
+- Added current `CREATE/DROP CATALOG` and `CREATE/DROP BRANCH` forms, Trino
+  `SHOW ... LIKE ... ESCAPE` variants, and `SHOW FUNCTIONS FROM/IN`.
+
+### Fixed
+
+- Replaced global Iceberg `@branch` rewriting with a token-aware transform that
+  only applies to DML targets and never alters strings, comments, or arbitrary
+  `@` syntax.
+- Matched Trino identifier restrictions for ASCII unquoted identifiers,
+  backquotes, empty quoted identifiers, and digit-leading identifiers.
+- Rejected previously accepted invalid statement forms including parenthesized
+  `ALTER ... SET PROPERTIES`, over-qualified `SET PATH`, `EXPLAIN VERBOSE`
+  without `ANALYZE`, incomplete `SHOW ... ESCAPE`, and invalid branch options.
+
 ## [0.10.0] - 2026-09-10
 
 ### Added

@@ -94,4 +94,18 @@ mod tests {
         let sql = "SELECT `foo` FROM t";
         assert!(sqlparser::parser::Parser::parse_sql(generic.as_ref(), sql).is_ok());
     }
+
+    #[test]
+    fn trino_rejects_non_ascii_unquoted_identifier() {
+        let trino = SqlDialect::Trino.parser();
+        assert!(sqlparser::parser::Parser::parse_sql(trino.as_ref(), "SELECT имя").is_err());
+        assert!(sqlparser::parser::Parser::parse_sql(trino.as_ref(), "SELECT \"имя\"").is_ok());
+    }
+
+    #[test]
+    fn trino_rejects_dollar_in_unquoted_identifier() {
+        let trino = SqlDialect::Trino.parser();
+        assert!(sqlparser::parser::Parser::parse_sql(trino.as_ref(), "SELECT foo$bar").is_err());
+        assert!(sqlparser::parser::Parser::parse_sql(trino.as_ref(), "SELECT \"foo$bar\"").is_ok());
+    }
 }
