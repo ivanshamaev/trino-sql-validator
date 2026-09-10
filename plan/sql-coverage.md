@@ -1,11 +1,14 @@
 # Trino SQL-statement coverage & data-type validation
 
 Status:
-- SQL-doc coverage: implemented; 85/85 statements from `docs/src/main/sphinx/sql`
-  (`/tmp/opencode/gap_analysis.py` corpus) parse with `dialect="trino"`.
-- Real-world corpus: 78/81 statements from
-  `trinodb/reports/sql/*`, trino-dbt-demo `customers.sql`,
-  trino-the-definitive-guide `tpch/*` + `iris-data-set/*` parse (see below for the 3).
+- Historical SQL-doc coverage: 85/85 statements from an earlier
+  `docs/src/main/sphinx/sql` audit parsed with `dialect="trino"`, but its
+  `/tmp/opencode/gap_analysis.py` corpus was not committed and is not a reproducible
+  current coverage claim. The Trino 483 audit and remaining gaps are tracked in
+  `plan/additional_dev_v0.10.0.md` and `tests/test_trino_v483_coverage.py`.
+- Current fixture corpus: every expected-valid file parses. The complete expected
+  state, statement count, and warning contract for all fixtures is enforced by
+  `tests/test_fixture_inventory.py`.
 - Data-type validation: implemented (name-existence warnings), see
   `src/types.rs` + `functions-validation.md` for the shared design.
 

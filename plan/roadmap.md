@@ -37,11 +37,26 @@
   containers while preserving source spans and ordinary `ROW(...)` value
   constructors. See `plan/sql-coverage.md`.
 
+## v0.10.0 — documentation-derived coverage
+- Added a complete fixture inventory contract and an executable syntax matrix based
+  on the Trino 483 SQL, Iceberg, Hive, and HDFS documentation.
+- Added Iceberg `FOR TIMESTAMP AS OF` parsing for timestamp/date expressions,
+  materialized-view staleness options, and corrected false warnings for
+  table-function syntax, row-pattern navigation, and Iceberg `table_changes`.
+- Added the documented `MATCH_RECOGNIZE SUBSET` clause order with strict malformed
+  definition checks.
+- Confirmed existing support for `EXECUTE IMMEDIATE`, `LIMIT ALL`, `JSON_TABLE`,
+  `GROUP BY AUTO`, `FETCH ... WITH TIES`, `TABLESAMPLE`, Hive bucket/partition
+  syntax, HDFS locations, and deeply nested structural types.
+- Remaining parser work is tracked in `plan/additional_dev_v0.10.0.md`: `WITH
+  SESSION`, inline `WITH FUNCTION`, `PIVOT ... GROUP BY`, `CORRESPONDING`, and
+  `NEAREST`.
+
 ## Next — clearer Trino cursor
-- Enrich `TrinoDialect` overrides for commonly-mis-parsed Trino-specific syntax:
-  - `EXECUTE IMMEDIATE`, `CALL` signatures
-  - `LIMIT ALL`
-  - Trino function names/special `SELECT ... FROM UNNEST(...)`.
+- Enrich `TrinoDialect` overrides for remaining commonly misparsed Trino-specific
+  syntax and broaden negative/source-position regression coverage.
+- Cover connector `CALL` signatures structurally without claiming semantic argument
+  validation.
 - Surface statement *type* (SELECT/DDL/...) from the parsed AST to the Python
   result (currently we only count statements and validate the file-level
   outcome); this unlocks an `allow_ddl=False` flag and per-statement error

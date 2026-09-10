@@ -4,7 +4,7 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::Dialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer, Whitespace};
 
 use crate::types;
 
@@ -107,6 +107,272 @@ fn statement_starts_with(tokens: &[TokenWithSpan], before: usize, keyword: Keywo
     let start = statement_start(tokens, before);
     next_significant(tokens, start, before)
         .is_some_and(|index| unquoted_keyword(&tokens[index]) == Some(keyword))
+}
+
+fn is_unquoted_word(token: &TokenWithSpan, expected: &str) -> bool {
+    matches!(
+        &token.token,
+        Token::Word(word)
+            if word.quote_style.is_none() && word.value.eq_ignore_ascii_case(expected)
+    )
+}
+
+fn create_materialized_view_keyword(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+) -> Option<usize> {
+    let create = next_significant(tokens, start, end)?;
+    if !is_unquoted_word(&tokens[create], "create") {
+        return None;
+    };
+    let mut cursor = next_significant(tokens, create + 1, end)?;
+    if is_unquoted_word(&tokens[cursor], "or") {
+        let replace = next_significant(tokens, cursor + 1, end)?;
+        if !is_unquoted_word(&tokens[replace], "replace") {
+            return None;
+        }
+        cursor = next_significant(tokens, replace + 1, end)?;
+    }
+    if !is_unquoted_word(&tokens[cursor], "materialized") {
+        return None;
+    }
+    let view = next_significant(tokens, cursor + 1, end)?;
+    is_unquoted_word(&tokens[view], "view").then_some(view)
+}
+
+fn statement_end(tokens: &[TokenWithSpan], start: usize) -> usize {
+    tokens[start..]
+        .iter()
+        .position(|token| token.token == Token::SemiColon)
+        .map_or(tokens.len(), |offset| start + offset)
+}
+
+fn materialized_view_option_rank(token: &TokenWithSpan) -> Option<usize> {
+    ["grace", "when", "comment", "with"]
+        .iter()
+        .position(|word| is_unquoted_word(token, word))
+}
+
+fn is_single_quoted_string(token: &TokenWithSpan) -> bool {
+    matches!(
+        token.token,
+        Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_)
+    )
+}
+
+fn is_interval_unit(token: &TokenWithSpan) -> bool {
+    ["year", "month", "day", "hour", "minute", "second"]
+        .iter()
+        .any(|unit| is_unquoted_word(token, unit))
+}
+
+fn materialized_view_options(
+    tokens: &[TokenWithSpan],
+    view: usize,
+    end: usize,
+) -> Option<(usize, Vec<(usize, usize)>)> {
+    let mut depth = 0usize;
+    let mut clauses = Vec::new();
+    let mut as_index = None;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(view + 1) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth.checked_sub(1)?;
+            }
+            _ if depth == 0 && is_unquoted_word(token, "as") => {
+                as_index = Some(index);
+                break;
+            }
+            _ if depth == 0 => {
+                if let Some(rank) = materialized_view_option_rank(token) {
+                    clauses.push((index, rank));
+                }
+            }
+            _ => {}
+        }
+    }
+    let as_index = as_index?;
+    if clauses.windows(2).any(|pair| pair[0].1 >= pair[1].1) {
+        return None;
+    }
+    Some((as_index, clauses))
+}
+
+fn blank_non_whitespace(tokens: &mut [TokenWithSpan], start: usize, end: usize) {
+    for token in &mut tokens[start..end] {
+        if !matches!(token.token, Token::Whitespace(_)) {
+            token.token = Token::Whitespace(Whitespace::Space);
+        }
+    }
+}
+
+fn normalize_materialized_view_options(tokens: &mut [TokenWithSpan]) {
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let Some(view) = create_materialized_view_keyword(tokens, start, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let Some((as_index, clauses)) = materialized_view_options(tokens, view, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let mut ranges = Vec::new();
+        let mut valid = true;
+        for (position, (clause, rank)) in clauses.iter().enumerate() {
+            let boundary = clauses
+                .get(position + 1)
+                .map_or(as_index, |(next, _)| *next);
+            match rank {
+                0 => {
+                    let Some(period) = next_significant(tokens, clause + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(interval) = next_significant(tokens, period + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(value) = next_significant(tokens, interval + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(unit) = next_significant(tokens, value + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    if !is_unquoted_word(&tokens[period], "period")
+                        || !is_unquoted_word(&tokens[interval], "interval")
+                        || !is_single_quoted_string(&tokens[value])
+                        || !is_interval_unit(&tokens[unit])
+                        || next_significant(tokens, unit + 1, boundary).is_some()
+                    {
+                        valid = false;
+                        break;
+                    }
+                    ranges.push((*clause, boundary));
+                }
+                1 => {
+                    let Some(stale) = next_significant(tokens, clause + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    let Some(behavior) = next_significant(tokens, stale + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    if !is_unquoted_word(&tokens[stale], "stale")
+                        || !(is_unquoted_word(&tokens[behavior], "inline")
+                            || is_unquoted_word(&tokens[behavior], "fail"))
+                        || next_significant(tokens, behavior + 1, boundary).is_some()
+                    {
+                        valid = false;
+                        break;
+                    }
+                    ranges.push((*clause, boundary));
+                }
+                2 => {
+                    let Some(value) = next_significant(tokens, clause + 1, boundary) else {
+                        valid = false;
+                        break;
+                    };
+                    if !is_single_quoted_string(&tokens[value])
+                        || next_significant(tokens, value + 1, boundary).is_some()
+                    {
+                        valid = false;
+                        break;
+                    }
+                    ranges.push((*clause, boundary));
+                }
+                3 => {}
+                _ => unreachable!(),
+            }
+        }
+        if valid {
+            for (range_start, range_end) in ranges {
+                blank_non_whitespace(tokens, range_start, range_end);
+            }
+        }
+        start = end.saturating_add(1);
+    }
+}
+
+fn is_identifier(token: &TokenWithSpan) -> bool {
+    matches!(token.token, Token::Word(_))
+}
+
+fn match_recognize_group(tokens: &[TokenWithSpan], index: usize) -> Option<(usize, usize)> {
+    let open = *enclosing_parentheses(tokens, index).last()?;
+    let keyword = previous_significant(tokens, open)?;
+    if !is_unquoted_word(&tokens[keyword], "match_recognize") {
+        return None;
+    }
+    matching_rparen(tokens, open).map(|close| (open, close))
+}
+
+fn match_recognize_subset_end(
+    tokens: &[TokenWithSpan],
+    subset: usize,
+    close: usize,
+) -> Option<usize> {
+    let mut cursor = next_significant(tokens, subset + 1, close)?;
+    loop {
+        if !is_identifier(&tokens[cursor]) || is_unquoted_word(&tokens[cursor], "define") {
+            return None;
+        }
+        cursor = next_significant(tokens, cursor + 1, close)?;
+        if tokens[cursor].token != Token::Eq {
+            return None;
+        }
+        cursor = next_significant(tokens, cursor + 1, close)?;
+        if tokens[cursor].token != Token::LParen {
+            return None;
+        }
+        let members_end = matching_rparen(tokens, cursor)?;
+        if members_end >= close {
+            return None;
+        }
+        let mut member = next_significant(tokens, cursor + 1, members_end)?;
+        loop {
+            if !is_identifier(&tokens[member]) {
+                return None;
+            }
+            let next = next_significant(tokens, member + 1, members_end);
+            let Some(comma) = next else {
+                break;
+            };
+            if tokens[comma].token != Token::Comma {
+                return None;
+            }
+            member = next_significant(tokens, comma + 1, members_end)?;
+        }
+        cursor = next_significant(tokens, members_end + 1, close)?;
+        if is_unquoted_word(&tokens[cursor], "define") {
+            return Some(cursor);
+        }
+        if tokens[cursor].token != Token::Comma {
+            return None;
+        }
+        cursor = next_significant(tokens, cursor + 1, close)?;
+    }
+}
+
+fn normalize_match_recognize_subsets(tokens: &mut [TokenWithSpan]) {
+    for subset in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[subset], "subset") {
+            continue;
+        }
+        let Some((_, close)) = match_recognize_group(tokens, subset) else {
+            continue;
+        };
+        let Some(define) = match_recognize_subset_end(tokens, subset, close) else {
+            continue;
+        };
+        blank_non_whitespace(tokens, subset, define);
+    }
 }
 
 fn is_in_create_type_declaration(tokens: &[TokenWithSpan], index: usize) -> bool {
@@ -248,6 +514,8 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<Vec<Statemen
     if parsed.is_ok() {
         return parsed;
     }
+    normalize_materialized_view_options(&mut tokens);
+    normalize_match_recognize_subsets(&mut tokens);
     normalize_nested_row_types(&mut tokens);
     Parser::new(dialect)
         .with_tokens_with_locations(tokens)

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "trino-sql-validator"
-version = "0.9.0"
+version = "0.10.0"
 description = "Fast Trino SQL syntax validator — Python library backed by Rust"
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,6 +25,12 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ivanshamaev/trino-sql-validator"
+Repository = "https://github.com/ivanshamaev/trino-sql-validator"
+Issues = "https://github.com/ivanshamaev/trino-sql-validator/issues"
+Changelog = "https://github.com/ivanshamaev/trino-sql-validator/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.1", "mypy>=1"]

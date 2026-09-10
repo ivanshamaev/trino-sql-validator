@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-10
+
+### Added
+
+- Added a complete SQL fixture contract and a Trino 483 documentation-derived
+  syntax matrix covering general SQL, Iceberg, Hive/HDFS locations, table
+  functions, and deeply nested structural types.
+- Added Iceberg `FOR TIMESTAMP AS OF` syntax support for timestamp and date
+  expressions.
+- Added Trino `GRACE PERIOD`, `WHEN STALE`, and `COMMENT` options for
+  `CREATE MATERIALIZED VIEW`.
+- Added the documented `SUBSET` clause order for `MATCH_RECOGNIZE`.
+
+### Fixed
+
+- Stopped reporting table-function syntax, row-pattern navigation functions,
+  and Iceberg `table_changes` as unknown functions.
+
 ## [0.9.0] - 2026-09-10
 
 ### Added

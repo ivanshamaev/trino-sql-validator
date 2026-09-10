@@ -1,6 +1,6 @@
 [package]
 name = "trino-sql-validator"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 description = "Fast Trino SQL syntax validator — Python library backed by Rust"
 license = "MIT"

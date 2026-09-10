@@ -61,6 +61,9 @@ static IPADDRESS_LITERAL_PATTERN: LazyLock<regex::Regex> =
 static ICEBERG_VERSION_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR\s+VERSION\s+AS\s+OF\b").unwrap());
 
+static ICEBERG_TIMESTAMP_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR(\s+TIMESTAMP\s+AS\s+OF\b)").unwrap());
+
 static ICEBERG_BRANCH_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)@\s*[a-zA-Z_][a-zA-Z0-9_$]*").unwrap());
 
@@ -132,6 +135,10 @@ fn normalize_iceberg_version_as_of(sql: &str) -> String {
     ICEBERG_VERSION_PATTERN
         .replace_all(sql, "VERSION AS OF")
         .into()
+}
+
+fn normalize_iceberg_timestamp_as_of(sql: &str) -> String {
+    ICEBERG_TIMESTAMP_PATTERN.replace_all(sql, "   $1").into()
 }
 
 fn normalize_iceberg_branch_references(sql: &str) -> String {
@@ -206,9 +213,11 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
     let sql = if *dialect == SqlDialect::Trino {
         normalize_top_identifiers(&normalize_ipaddress_literals(
             &normalize_iceberg_named_versions(&normalize_iceberg_branch_references(
-                &normalize_iceberg_version_as_of(&normalize_function_values(
-                    &normalize_array_values(&normalize_typed_values(&normalize_scalar_values(
-                        &normalize_array_types(&normalize_prepare_from(sql)),
+                &normalize_iceberg_timestamp_as_of(&normalize_iceberg_version_as_of(
+                    &normalize_function_values(&normalize_array_values(&normalize_typed_values(
+                        &normalize_scalar_values(&normalize_array_types(&normalize_prepare_from(
+                            sql,
+                        ))),
                     ))),
                 )),
             )),
@@ -250,7 +259,7 @@ fn find_unknown_functions(
         if let Expr::Function(func) = expr {
             if let Some(ident) = func.name.0.last().and_then(|part| part.as_ident()) {
                 let name = ident.value.to_ascii_lowercase();
-                if !functions::is_known_function(&name) {
+                if !is_known_trino_function(&name) {
                     let (line, column) = span_position(ident);
                     unknown.push(("function".to_string(), name, line, column));
                 }
@@ -259,6 +268,22 @@ fn find_unknown_functions(
         ControlFlow::<()>::Continue(())
     });
     unknown
+}
+
+fn is_known_trino_function(name: &str) -> bool {
+    functions::is_known_function(name)
+        || matches!(
+            name,
+            "classifier"
+                | "descriptor"
+                | "first"
+                | "last"
+                | "match_number"
+                | "next"
+                | "prev"
+                | "table"
+                | "table_changes"
+        )
 }
 
 /// Collect data types that are not in the Trino catalog into `warnings`,
@@ -528,6 +553,68 @@ mod tests {
     }
 
     #[test]
+    fn trino_accepts_iceberg_timestamp_time_travel() {
+        for sql in [
+            "SELECT * FROM customer FOR TIMESTAMP AS OF TIMESTAMP '2022-03-23 09:59:29.803 Europe/Vienna'",
+            "SELECT * FROM customer FOR TIMESTAMP AS OF DATE '2022-03-23'",
+            "SELECT * FROM customer FOR TIMESTAMP AS OF current_timestamp - INTERVAL '1' DAY",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(warnings.is_empty());
+        }
+
+        let sql =
+            "SELECT * FROM customer FOR TIMESTAMP AS OF DATE '2022-03-23' WHERE marh(custkey)";
+        let (valid, _, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].1, "marh");
+        assert_eq!(warnings[0].3, sql.find("marh").map(|offset| offset + 1));
+    }
+
+    #[test]
+    fn trino_rejects_incomplete_iceberg_timestamp_time_travel() {
+        for sql in [
+            "SELECT * FROM customer FOR TIMESTAMP AS OF",
+            "SELECT * FROM customer FOR TIMESTAMP AS OF +",
+            "SELECT * FROM customer FOR TIMESTAMP AS OF TIMESTAMP 'unterminated",
+        ] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn trino_accepts_materialized_view_staleness_options() {
+        for sql in [
+            "CREATE MATERIALIZED VIEW orders_summary GRACE PERIOD INTERVAL '1' HOUR WHEN STALE FAIL AS SELECT orderdate, sum(totalprice) AS price FROM orders GROUP BY orderdate",
+            "CREATE MATERIALIZED VIEW orders_summary WHEN STALE INLINE AS SELECT * FROM orders",
+            "CREATE OR REPLACE MATERIALIZED VIEW orders_summary GRACE PERIOD INTERVAL '1' DAY WHEN STALE FAIL COMMENT 'daily summary' WITH (format = 'ORC') AS SELECT * FROM orders",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn trino_rejects_malformed_materialized_view_staleness_options() {
+        for sql in [
+            "CREATE MATERIALIZED VIEW v GRACE PERIOD WHEN STALE FAIL AS SELECT 1",
+            "CREATE MATERIALIZED VIEW v GRACE PERIOD nonsense WHEN STALE FAIL AS SELECT 1",
+            "CREATE MATERIALIZED VIEW v WHEN STALE UNKNOWN AS SELECT 1",
+            "CREATE MATERIALIZED VIEW v COMMENT identifier AS SELECT 1",
+            "CREATE MATERIALIZED VIEW v WHEN STALE FAIL GRACE PERIOD INTERVAL '1' HOUR AS SELECT 1",
+        ] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
+    }
+
+    #[test]
     fn documented_special_expressions_are_known() {
         let (_, _, _, _, _, warnings) = validate_sql_impl(
             "SELECT current_date, current_timestamp, localtime, localtimestamp, grouping(a), histogram(x) FROM t GROUP BY GROUPING SETS ((a), ())",
@@ -555,6 +642,55 @@ mod tests {
         let (_, _, _, _, _, warnings) =
             validate_sql_impl("SELECT round(1.5), array_agg(x), count(*) FROM t", &trino());
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn documented_table_and_pattern_functions_produce_no_warnings() {
+        let sql = "
+            SELECT * FROM TABLE(exclude_columns(
+                input => TABLE(orders),
+                columns => DESCRIPTOR(clerk, comment)
+            ));
+            SELECT * FROM TABLE(system.table_changes(
+                schema_name => 'default',
+                table_name => 't1',
+                start_snapshot_id => 1,
+                end_snapshot_id => 2
+            ));
+            SELECT * FROM orders MATCH_RECOGNIZE (
+                PATTERN (A B+)
+                DEFINE B AS totalprice < PREV(totalprice)
+            )
+        ";
+        let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(count, 3);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn trino_accepts_match_recognize_subsets() {
+        for sql in [
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (A B+ C+ D+) SUBSET U = (C, D) DEFINE B AS totalprice < PREV(totalprice), C AS totalprice > PREV(totalprice), D AS totalprice > PREV(totalprice))",
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (A B C) SUBSET U = (A, B), V = (B, C) DEFINE B AS totalprice > A.totalprice)",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn trino_rejects_malformed_match_recognize_subsets() {
+        for sql in [
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (A B) SUBSET U = () DEFINE B AS true)",
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (A B) SUBSET U (A, B) DEFINE B AS true)",
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (A B) SUBSET U = (A, B) B AS true)",
+        ] {
+            let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
+            assert!(!valid, "expected invalid SQL: {sql}");
+        }
     }
 
     #[test]
