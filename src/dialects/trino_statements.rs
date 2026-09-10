@@ -491,6 +491,9 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
         if p.consume_token(&Token::LParen) {
             consume_balanced_parens(p)?;
         }
+        if opt_kw(p, Keyword::WHERE) {
+            consume_to_end(p)?;
+        }
     } else {
         return Err(ParserError::ParserError(
             "unsupported ALTER TABLE form".into(),

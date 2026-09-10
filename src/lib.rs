@@ -55,6 +55,32 @@ static TOP_QUALIFIED_IDENTIFIER_PATTERN: LazyLock<regex::Regex> =
 static TOP_ALIAS_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)(\bAS\s+)top\b|(\))\s+top\b").unwrap());
 
+static IPADDRESS_LITERAL_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\bIPADDRESS\s*('[^']*')").unwrap());
+
+static ICEBERG_VERSION_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR\s+VERSION\s+AS\s+OF\b").unwrap());
+
+static ICEBERG_BRANCH_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)@\s*[a-zA-Z_][a-zA-Z0-9_$]*").unwrap());
+
+static ICEBERG_NAMED_VERSION_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)(\bVERSION\s+AS\s+OF)\s+'[^']*'").unwrap());
+
+static SCALAR_VALUES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?is)\(\s*VALUES\s+((?:'[^']*'\s*,\s*)+'[^']*')\s*\)").unwrap()
+});
+
+static TYPED_VALUES_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?is)\bVALUES\s+VARCHAR\s+('(?:''|[^'])*')").unwrap());
+
+static ARRAY_VALUES_PATTERN: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?is)\bVALUES\s+(ARRAY\s*\[[^\]]*\])").unwrap());
+
+static FUNCTION_VALUES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?is)\bVALUES\s+(map_from_entries\s*\(\s*ARRAY\s*\[[^\]]*\]\s*\))").unwrap()
+});
+
 fn normalize_prepare_from(sql: &str) -> String {
     PREPARE_FROM_PATTERN
         .replace_all(sql, |captures: &regex::Captures<'_>| {
@@ -96,6 +122,58 @@ fn normalize_top_identifiers(sql: &str) -> String {
         .into()
 }
 
+fn normalize_ipaddress_literals(sql: &str) -> String {
+    IPADDRESS_LITERAL_PATTERN
+        .replace_all(sql, "CAST($1 AS IPADDRESS)")
+        .into()
+}
+
+fn normalize_iceberg_version_as_of(sql: &str) -> String {
+    ICEBERG_VERSION_PATTERN
+        .replace_all(sql, "VERSION AS OF")
+        .into()
+}
+
+fn normalize_iceberg_branch_references(sql: &str) -> String {
+    ICEBERG_BRANCH_PATTERN.replace_all(sql, "").into()
+}
+
+fn normalize_iceberg_named_versions(sql: &str) -> String {
+    ICEBERG_NAMED_VERSION_PATTERN
+        .replace_all(sql, "$1 0")
+        .into()
+}
+
+fn normalize_scalar_values(sql: &str) -> String {
+    SCALAR_VALUES_PATTERN
+        .replace_all(sql, |captures: &regex::Captures<'_>| {
+            let values = captures.get(1).unwrap().as_str();
+            let rows = values
+                .split(',')
+                .map(|value| format!("({})", value.trim()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(VALUES {rows})")
+        })
+        .into()
+}
+
+fn normalize_typed_values(sql: &str) -> String {
+    TYPED_VALUES_PATTERN
+        .replace_all(sql, "VALUES (CAST($1 AS VARCHAR))")
+        .into()
+}
+
+fn normalize_array_values(sql: &str) -> String {
+    ARRAY_VALUES_PATTERN.replace_all(sql, "VALUES ($1)").into()
+}
+
+fn normalize_function_values(sql: &str) -> String {
+    FUNCTION_VALUES_PATTERN
+        .replace_all(sql, "VALUES ($1)")
+        .into()
+}
+
 fn has_empty_from_clause(sql: &str, dialect: &dyn sqlparser::dialect::Dialect) -> bool {
     let mut tokenizer = Tokenizer::new(dialect, sql);
     let Ok(tokens) = tokenizer.tokenize() else {
@@ -126,7 +204,15 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
         );
     }
     let sql = if *dialect == SqlDialect::Trino {
-        normalize_top_identifiers(&normalize_array_types(&normalize_prepare_from(sql)))
+        normalize_top_identifiers(&normalize_ipaddress_literals(
+            &normalize_iceberg_named_versions(&normalize_iceberg_branch_references(
+                &normalize_iceberg_version_as_of(&normalize_function_values(
+                    &normalize_array_values(&normalize_typed_values(&normalize_scalar_values(
+                        &normalize_array_types(&normalize_prepare_from(sql)),
+                    ))),
+                )),
+            )),
+        ))
     } else {
         sql.to_string()
     };
@@ -416,6 +502,42 @@ mod tests {
             let (valid, _, _, _, _, _) = validate_sql_impl(sql, &trino());
             assert!(valid, "expected to parse: {sql}");
         }
+    }
+
+    #[test]
+    fn trino_accepts_ipaddress_literals() {
+        let (valid, _, _, _, _, warnings) = validate_sql_impl(
+            "SELECT contains('10.0.0.0/8', IPADDRESS '11.255.255.255')",
+            &trino(),
+        );
+        assert!(valid);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn trino_accepts_iceberg_version_time_travel() {
+        let (valid, count, _, _, _, _) =
+            validate_sql_impl("SELECT * FROM customer FOR VERSION AS OF 1", &trino());
+        assert!(valid);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn documented_special_expressions_are_known() {
+        let (_, _, _, _, _, warnings) = validate_sql_impl(
+            "SELECT current_date, current_timestamp, localtime, localtimestamp, grouping(a), histogram(x) FROM t GROUP BY GROUPING SETS ((a), ())",
+            &trino(),
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn documented_json_functions_are_known() {
+        let (_, _, _, _, _, warnings) = validate_sql_impl(
+            "SELECT json_exists(x, 'lax $.value'), json_query(x, 'lax $'), json_value(x, 'lax $.value'), json_array(x), json_object('x' : x) FROM t",
+            &trino(),
+        );
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
 
     #[test]

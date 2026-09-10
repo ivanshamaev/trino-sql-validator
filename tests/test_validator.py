@@ -95,6 +95,24 @@ def test_validate_file_ddl() -> None:
     assert result.statement_count == 3
 
 
+@pytest.mark.parametrize(
+    ("filename", "statement_count"),
+    [
+        ("datamart_example.sql", 1),
+        ("samples.sql", 6),
+        ("example-queries.sql", 76),
+        ("iceberg_trino_sqldemo.sql", 100),
+    ],
+)
+def test_documented_fixture_corpus_validates(filename: str, statement_count: int) -> None:
+    result = validate_file(FIXTURES / filename)
+    assert result.valid is True
+    assert result.statement_count == statement_count
+    assert result.error is None
+    if filename != "iceberg_trino_sqldemo.sql":
+        assert result.warnings == ()
+
+
 def test_validate_file_empty() -> None:
     result = validate_file(FIXTURES / "empty.sql")
     assert result.valid is True
@@ -371,8 +389,8 @@ def test_sqlparser_merge_fixture_validates() -> None:
     assert result.statement_count == 1
 
 
-def test_iceberg_demo_fixture_reports_known_parser_limit() -> None:
-    result = validate_file(FIXTURES / "iceberg_trino_sqldemo.sql")
+def test_nested_row_fixture_reports_known_parser_limit() -> None:
+    result = validate_file(FIXTURES / "trino_reports_tests_schema.sql")
     assert result.valid is False
     assert result.error is not None
-    assert result.error.line == 216
+    assert result.error.line == 14

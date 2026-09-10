@@ -596,7 +596,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_table_versioning(&self) -> bool {
-        GenericDialect::supports_table_versioning(&GenericDialect {})
+        true
     }
 
     fn supports_top_before_distinct(&self) -> bool {

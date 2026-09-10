@@ -70,6 +70,23 @@ FUNCTION_FILES = [
 DIRECTIVE_RE = re.compile(r":::\{function\}\s+([a-zA-Z0-9_]+)")
 CROSS_REF_RE = re.compile(r"\{func\}\s*`([a-zA-Z0-9_]+)`")
 
+# Trino documents SQL-standard no-parentheses expressions as `data` entries,
+# while `grouping` is documented as an operation rather than a function.
+# They are still represented as function expressions by sqlparser's AST.
+SPECIAL_FUNCTIONS = {
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "grouping",
+    "json_array",
+    "json_exists",
+    "json_object",
+    "json_query",
+    "json_value",
+    "localtime",
+    "localtimestamp",
+}
+
 OUT_PATH = Path(__file__).resolve().parent.parent / "src" / "functions.rs"
 
 
@@ -92,6 +109,7 @@ def extract_names(docs: dict[str, str]) -> set[str]:
     for content in docs.values():
         names.update(DIRECTIVE_RE.findall(content))
         names.update(CROSS_REF_RE.findall(content))
+    names.update(SPECIAL_FUNCTIONS)
     return {name.lower() for name in names}
 
 
