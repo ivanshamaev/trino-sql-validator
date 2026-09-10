@@ -6,7 +6,7 @@ use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, St
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use crate::dialects::SqlDialect;
+use crate::dialects::{parse_trino_sql, SqlDialect};
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, Tokenizer};
 
@@ -216,7 +216,12 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
     } else {
         sql.to_string()
     };
-    match Parser::parse_sql(parser.as_ref(), &sql) {
+    let parsed = if *dialect == SqlDialect::Trino {
+        parse_trino_sql(parser.as_ref(), &sql)
+    } else {
+        Parser::parse_sql(parser.as_ref(), &sql)
+    };
+    match parsed {
         Ok(statements) => {
             let mut warnings = if *dialect == SqlDialect::Trino {
                 let mut warnings = find_unknown_functions(&statements);
@@ -595,6 +600,55 @@ mod tests {
             &trino(),
         );
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn nested_row_array_and_map_types_parse() {
+        for sql in [
+            "CREATE TABLE t (
+                nested row(a row(b bigint)),
+                rows array(row(c varchar)),
+                keyed map(varchar, row(d array(row(e integer))))
+            )",
+            "SELECT CAST(x AS row(a row(b bigint))) FROM t",
+            "CREATE FUNCTION f() RETURNS row(a row(b bigint)) RETURN ROW(ROW(1))",
+            "ALTER TABLE t ADD COLUMN nested row(a row(b bigint))",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn unknown_type_in_nested_row_preserves_position() {
+        let sql = "CREATE TABLE t (a row(x array(row(y bignum))))";
+        let (valid, _, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, "type");
+        assert_eq!(warnings[0].1, "bignum");
+        assert_eq!(warnings[0].2, Some(1));
+        assert_eq!(warnings[0].3, Some(37));
+    }
+
+    #[test]
+    fn row_value_constructors_are_not_rewritten_as_types() {
+        let sql =
+            "SELECT ROW(1, 2.0), ROW(current_date, current_timestamp), ROW(varchar, bigint) FROM t;
+            CREATE TABLE nested_rows (value row(child row(id bigint)))";
+        let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(count, 2);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn trino_rejects_generic_angle_map_type_syntax() {
+        let (valid, _, _, _, _, _) =
+            validate_sql_impl("CREATE TABLE t (value map<varchar, bigint>)", &trino());
+        assert!(!valid);
     }
 
     #[test]

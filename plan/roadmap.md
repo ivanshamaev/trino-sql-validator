@@ -24,11 +24,20 @@
   (`tools/extract_types.py`).
 - `CREATE FUNCTION`, `DESCRIBE INPUT/OUTPUT` and `RESET SESSION` handled
   strictly (no permissive sqlparser fallback).
-- Known accepted limitation: `${...}`/`{{...}}` templates and sqlparser's
-  `array(...)`/deeply-nested-`row(...)` gaps remain (documented in
-  `plan/sql-coverage.md`).
 
-## v0.2.x — clearer Trino cursor
+## v0.9.0 — fixture-driven Trino compatibility
+- All expected-valid SQL fixtures parse, including the Trino example corpus
+  and the 100-statement Iceberg demo.
+- Added compatibility parsing for `IPADDRESS` literals, Iceberg time travel and
+  named references, additional `VALUES` forms, and `ALTER TABLE ... EXECUTE
+  ... WHERE`.
+- Completed function-catalog coverage for date/time expressions, `grouping`,
+  and SQL/JSON functions.
+- Added token-level support for nested `ROW` types and their `ARRAY`/`MAP`
+  containers while preserving source spans and ordinary `ROW(...)` value
+  constructors. See `plan/sql-coverage.md`.
+
+## Next — clearer Trino cursor
 - Enrich `TrinoDialect` overrides for commonly-mis-parsed Trino-specific syntax:
   - `EXECUTE IMMEDIATE`, `CALL` signatures
   - `LIMIT ALL`

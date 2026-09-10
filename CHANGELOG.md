@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ... WHERE` statements.
 - Recognized documented date/time expressions, `grouping`, and SQL/JSON
   functions so they no longer produce unknown-function warnings.
+- Added syntax support for deeply nested Trino `ROW` types, including
+  `ARRAY(ROW(...))` and `MAP(..., ROW(...))`, while preserving source positions
+  and leaving `ROW(...)` value constructors unchanged.
 
 ## [0.8.0] - 2026-09-07
 

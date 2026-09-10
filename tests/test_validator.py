@@ -275,23 +275,6 @@ def test_complex_trino_fixtures_validate_locally(filename: str, statement_count:
     assert result.statement_count == statement_count
 
 
-@pytest.mark.parametrize(
-    ("filename", "line", "column"),
-    [
-        ("trino_reports_tests_schema.sql", 14, 21),
-    ],
-)
-def test_complex_fixtures_preserve_documented_limitations(
-    filename: str, line: int, column: int
-) -> None:
-    result = validate_file(FIXTURES / filename)
-    assert result.valid is False
-    assert result.statement_count == 0
-    assert result.error is not None
-    assert result.error.line == line
-    assert result.error.column == column
-
-
 def test_dbt_jinja_fixture_validates_in_auto_mode() -> None:
     result = validate_file(FIXTURES / "trino_dbt_customers.sql")
     assert result.valid is True
@@ -389,8 +372,9 @@ def test_sqlparser_merge_fixture_validates() -> None:
     assert result.statement_count == 1
 
 
-def test_nested_row_fixture_reports_known_parser_limit() -> None:
+def test_nested_row_fixture_validates() -> None:
     result = validate_file(FIXTURES / "trino_reports_tests_schema.sql")
-    assert result.valid is False
-    assert result.error is not None
-    assert result.error.line == 14
+    assert result.valid is True
+    assert result.statement_count == 6
+    assert result.error is None
+    assert result.warnings == ()

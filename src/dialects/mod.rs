@@ -6,6 +6,9 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect};
 pub mod trino_statements;
 
 mod generic_delegates;
+mod trino_types;
+
+pub(crate) use trino_types::parse_sql as parse_trino_sql;
 
 /// SQL dialects supported by the validator.
 ///

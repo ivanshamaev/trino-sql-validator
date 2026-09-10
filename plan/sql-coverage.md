@@ -48,12 +48,11 @@ sorted by position.
 
 ## Known limitations (accepted, do not "fix" by loosening the dialect)
 
-- sqlparser's data-type parser understands only `map(A, B)`, `row(...)`, and
-  `array<...>`; Trino's `array(...)` component syntax and deeply nested
-  `row(...)` (`row(a row(b bigint))`, `array(row(x bigint))`, `row(a map(...))`,
-  `row(a array<...>)`) fail to parse even though they are valid Trino. This is a
-  limitation of sqlparser's `parse_data_type` (no Dialect type hook exists), not
-  of the catalog walker.
+- sqlparser has no dialect hook for data-type parsing. The Trino compatibility
+  layer therefore rewrites only recognized type-context tokens for nested
+  `ROW`, `ARRAY`, and `MAP` definitions into sqlparser's supported structural
+  forms. Original token spans are retained for warnings and errors, and
+  `ROW(...)` value constructors are parsed without rewriting.
 - Function/type presence is a name-existence check; arity, argument types,
   precision/scale and semantics are out of scope (syntax validator).
 - dbt/Jinja templates are supported at the Python API boundary with the

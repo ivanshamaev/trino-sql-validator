@@ -81,12 +81,11 @@ for complete coverage.
 `sqlparser-rs` (the parser we use) performs **syntax** validation, not semantic
 analysis. It may accept SQL that Trino would reject at analysis time (unknown
 columns/tables, duplicate columns), and it can reject exotic Trino-specific DDL.
-In particular, Trino's `array(...)` component-type syntax and deeply nested
-`row(...)` types (e.g. `row(a row(b bigint))` or `array(row(x bigint))`) are not
-parsed by sqlparser, which only understands `array<...>`/`map(...)`/`row(...)`
-at certain nesting levels. For the overwhelming majority of SELECT/DDL statements
-the results are accurate. See [`plan/roadmap.md`](plan/roadmap.md) for the path
-toward stricter Trino fidelity.
+The validator has targeted compatibility parsing for documented Trino syntax,
+including nested `ROW`/`ARRAY`/`MAP` types, but it does not replace Trino's
+semantic analyzer. For the overwhelming majority of SELECT/DDL statements the
+results are accurate. See [`plan/roadmap.md`](plan/roadmap.md) for the path toward
+stricter Trino fidelity.
 
 ## Development
 

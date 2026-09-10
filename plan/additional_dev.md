@@ -2,33 +2,17 @@
 
 ## Analysis Snapshot
 
-The current Python suite passes: `63 passed` with `PYTHONPATH=python pytest -q`.
+The current suites pass with `39` Rust tests and `62` Python tests.
 
-There are 16 SQL files in `tests/fixtures/`. The test suite directly references
-13 of them. Three files are currently not used by pytest:
+All 16 SQL files in `tests/fixtures/` are referenced by pytest. Fourteen parse
+as valid SQL, `empty.sql` is valid with zero statements, and `invalid_one.sql`
+is intentionally invalid. The larger fixture counts are asserted explicitly:
+`example-queries.sql` (76), `iceberg_trino_sqldemo.sql` (100),
+`trino_reports_tests_schema.sql` (6), `trino_tpch_queries.sql` (39),
+`trino_iris_queries.sql` (18), and `trino_reports_optimize.sql` (17).
 
-- `datamart_example.sql` — parses as one valid statement, with one
-  `FunctionWarning` for `current_date`.
-- `example-queries.sql` — fails at line 65, column 41 on the Trino
-  `IPADDRESS '11.255.255.255'` literal.
-- `samples.sql` — parses as six valid statements, with no warnings.
-
-The directly tested fixtures have the following status:
-
-- Validated with statement-count assertions: `valid_multi.sql` (3),
-  `ddl_multi.sql` (3), `trino_specific.sql` (1), `trino_reports_optimize.sql`
-  (17), `trino_iris_queries.sql` (18), `trino_tpch_queries.sql` (39),
-  `trino_dbt_customers.sql` (1), `trino_recursive_transformed.sql` (4), and
-  `sqlparser_merge_example.sql` (1).
-- Intentionally invalid: `invalid_one.sql`.
-- Empty input: `empty.sql` (0 statements).
-- Expected parser limitations: `trino_reports_tests_schema.sql` fails at
-  line 14, column 21 on a nested `row(...)` type; `iceberg_trino_sqldemo.sql`
-  fails at line 216, column 28 on `FOR VERSION AS OF` time-travel syntax.
-
-The full fixture scan also found warnings that are not asserted by tests:
-`current_timestamp` in `valid_multi.sql`, `current_date` in
-`datamart_example.sql`, and `grouping` in `trino_tpch_queries.sql`.
+The fixture corpus produces no warnings except the expected non-fatal
+`table_changes` plugin-function warning in `iceberg_trino_sqldemo.sql`.
 
 ## Documentation Cross-check
 
@@ -39,8 +23,8 @@ constructs, not semantic-only examples:
   `language/types.md`; the failure in `example-queries.sql` is therefore a
   parser-compatibility gap.
 - `ROW` fields may contain any SQL type, so nested `row(...)` in
-  `trino_reports_tests_schema.sql` is valid Trino syntax and is a parser gap,
-  not an invalid fixture.
+  `trino_reports_tests_schema.sql` is valid Trino syntax and required a parser
+  compatibility layer rather than an invalid-fixture exception.
 - Iceberg documents `FOR VERSION AS OF` time travel, named branch/tag
   references, and `ALTER TABLE ... EXECUTE` procedures. The failure in
   `iceberg_trino_sqldemo.sql` is therefore a missing grammar feature, while
@@ -72,33 +56,27 @@ Completed in the current implementation:
 - Synchronized the generated function catalog with the Trino docs and added
   special handling for no-parentheses date/time expressions, `grouping`, and
   JSON functions.
-- Added Rust and Python regression tests. The current suite passes with `35`
-  Rust tests and `63` Python tests.
-
-Remaining limitation:
-
-- Nested Trino `ROW` data types such as `row(a row(b bigint))` still fail at
-  `trino_reports_tests_schema.sql:14`. `sqlparser 0.62` has no dialect hook
-  for its data-type parser, so this should be handled as a separate parser
-  design task rather than by permissive text masking.
+- Added token-level parsing compatibility for nested Trino `ROW` types and
+  their `ARRAY`/`MAP` containers while preserving source spans and ordinary
+  `ROW(...)` value constructors.
+- Added Rust and Python regression tests. The current suites pass with `39`
+  Rust tests and `62` Python tests, and every expected-valid fixture parses.
 
 ## Planned Work
 
-### 1. Make fixture coverage explicit
+### 1. Consolidate fixture coverage
 
-- Add a parameterized fixture inventory test for every SQL file.
+- Consolidate the existing direct fixture tests into a parameterized inventory
+  so new SQL files cannot be added without an explicit expected result.
 - Record the expected status, statement count, and, where applicable, expected
   warning names or parser error location.
-- Include the three currently untested files so new fixture additions cannot be
-  silently ignored.
 - Keep input fixtures unchanged unless a fixture is proven malformed by design;
   the test should document the observed contract rather than hide failures.
 
 ### 2. Separate supported behavior from accepted limitations
 
-- Design and implement a real nested Trino data-type parser strategy, then
-  remove the limitation assertion only after valid nested `ROW`, `ARRAY(ROW)`,
-  and `MAP(..., ROW)` cases are covered.
+- Keep focused regressions for nested `ROW`, `ARRAY(ROW)`, and
+  `MAP(..., ROW)` types, source positions, and `ROW(...)` value constructors.
 - Keep parser regressions for `IPADDRESS`, Iceberg time travel, branch
   references, and Iceberg `ALTER TABLE EXECUTE` forms.
 
@@ -146,8 +124,8 @@ Remaining limitation:
 
 ## Suggested Order
 
-1. Add the complete fixture inventory and classify expected outcomes.
+1. Consolidate the complete fixture inventory and classify expected outcomes.
 2. Build the documentation-derived syntax matrix and classify each unsupported
   form as parser work, accepted limitation, or out of scope.
-3. Implement nested row-type parsing with focused Rust and fixture tests.
+3. Add the environment-independent regression cases.
 4. Run the full CI-equivalent verification commands.
