@@ -68,9 +68,30 @@
   broader statement grammar, expressions, types, and SQL routine bodies. See
   `plan/v0.11.0_SqlParser.md`.
 
+## v0.12.0 — query compatibility expansion
+- Completed the carried high-value query forms: `WITH SESSION`, inline
+  expression-returning `WITH FUNCTION`, `CORRESPONDING`, `PIVOT ... GROUP BY`,
+  and `NEAREST`. Inline declarations participate in warning discovery, while
+  calls to locally declared names are recognized.
+- Added structural support for `ROW(...).* [AS (...)]`, `GROUP BY
+  ALL/DISTINCT`, `AT LOCAL`, scalar relation `VALUES`, and empty `ROLLUP()` /
+  `CUBE()` forms. Each compatibility transform is token-located so warning
+  positions remain tied to the source SQL.
+- Migrated the remaining SQL-changing compatibility paths from regex rewriting
+  to token/context transforms, avoiding changes inside strings and comments.
+- Added strict guards for known syntax false accepts. The reproducible Trino 483
+  audit now accepts 371/456 positive statements and rejects all 23 direct
+  negatives; it rejects 52/56 inputs from the separate error suite. The retained
+  mismatches and remaining table-function/routine grammar work are explicit in
+  `plan/v0.11.0_SqlParser.md`.
+
 ## Next — clearer Trino cursor
+- Add table-function table-argument aliases and organization clauses, then
+  broaden malformed-neighbor and source-position regression coverage for every
+  compatibility production.
 - Enrich `TrinoDialect` overrides for remaining commonly misparsed Trino-specific
-  syntax and broaden negative/source-position regression coverage.
+  syntax, especially routine characteristics, dollar bodies, compound routines,
+  and broader statement/type grammar.
 - Cover connector `CALL` signatures structurally without claiming semantic argument
   validation.
 - Surface statement *type* (SELECT/DDL/...) from the parsed AST to the Python

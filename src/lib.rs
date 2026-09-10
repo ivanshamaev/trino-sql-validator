@@ -3,6 +3,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use sqlparser::ast::visit_expressions;
 use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, Statement};
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -34,146 +35,6 @@ static LOCATION_PATTERN: LazyLock<regex::Regex> =
 static LOCATION_SUFFIX_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+at Line: \d+, Column: \d+$").unwrap());
 
-/// Trino writes prepared statements as `PREPARE name FROM <query>`; sqlparser
-/// expects `PREPARE name AS <query>`. Normalize the first `FROM` of a PREPARE
-/// statement (there is nothing syntactically between `PREPARE <name>` and the
-/// keyword, so a regex is safe here).
-static PREPARE_FROM_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)\b(PREPARE\s+[a-zA-Z_][a-zA-Z0-9_$]*)\s+FROM\b").unwrap()
-});
-
-static ARRAY_TYPE_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        r"(?i)(\bAS\s+ARRAY)\s*\(\s*[a-zA-Z_][a-zA-Z0-9_]*(?:\s+WITH\s+TIME\s+ZONE)?\s*\)",
-    )
-    .unwrap()
-});
-
-static TOP_QUALIFIED_IDENTIFIER_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\btop\s*(\.)").unwrap());
-
-static TOP_ALIAS_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)(\bAS\s+)top\b|(\))\s+top\b").unwrap());
-
-static IPADDRESS_LITERAL_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\bIPADDRESS\s*('[^']*')").unwrap());
-
-static ICEBERG_VERSION_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR\s+VERSION\s+AS\s+OF\b").unwrap());
-
-static ICEBERG_TIMESTAMP_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\bFOR(\s+TIMESTAMP\s+AS\s+OF\b)").unwrap());
-
-static ICEBERG_NAMED_VERSION_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)(\bVERSION\s+AS\s+OF)\s+'[^']*'").unwrap());
-
-static SCALAR_VALUES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?is)\(\s*VALUES\s+((?:'[^']*'\s*,\s*)+'[^']*')\s*\)").unwrap()
-});
-
-static TYPED_VALUES_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?is)\bVALUES\s+VARCHAR\s+('(?:''|[^'])*')").unwrap());
-
-static ARRAY_VALUES_PATTERN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?is)\bVALUES\s+(ARRAY\s*\[[^\]]*\])").unwrap());
-
-static FUNCTION_VALUES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?is)\bVALUES\s+(map_from_entries\s*\(\s*ARRAY\s*\[[^\]]*\]\s*\))").unwrap()
-});
-
-fn normalize_prepare_from(sql: &str) -> String {
-    PREPARE_FROM_PATTERN
-        .replace_all(sql, |captures: &regex::Captures<'_>| {
-            let matched = captures.get(0).unwrap().as_str();
-            let prefix = captures.get(1).unwrap().as_str();
-            format!(
-                "{prefix} AS{}",
-                " ".repeat(matched.len() - prefix.len() - 3)
-            )
-        })
-        .into()
-}
-
-fn normalize_array_types(sql: &str) -> String {
-    ARRAY_TYPE_PATTERN
-        .replace_all(sql, |captures: &regex::Captures<'_>| {
-            let mut value = captures.get(0).unwrap().as_str().to_string();
-            if let Some(open) = value.rfind('(') {
-                value.replace_range(open..=open, "<");
-            }
-            if let Some(close) = value.rfind(')') {
-                value.replace_range(close..=close, ">");
-            }
-            value
-        })
-        .into()
-}
-
-fn normalize_top_identifiers(sql: &str) -> String {
-    let sql = TOP_QUALIFIED_IDENTIFIER_PATTERN.replace_all(sql, "\"top\"$1");
-    TOP_ALIAS_PATTERN
-        .replace_all(&sql, |captures: &regex::Captures<'_>| {
-            if let Some(prefix) = captures.get(1) {
-                format!("{}\"top\"", prefix.as_str())
-            } else {
-                ") \"top\"".to_string()
-            }
-        })
-        .into()
-}
-
-fn normalize_ipaddress_literals(sql: &str) -> String {
-    IPADDRESS_LITERAL_PATTERN
-        .replace_all(sql, "CAST($1 AS IPADDRESS)")
-        .into()
-}
-
-fn normalize_iceberg_version_as_of(sql: &str) -> String {
-    ICEBERG_VERSION_PATTERN
-        .replace_all(sql, "VERSION AS OF")
-        .into()
-}
-
-fn normalize_iceberg_timestamp_as_of(sql: &str) -> String {
-    ICEBERG_TIMESTAMP_PATTERN.replace_all(sql, "   $1").into()
-}
-
-fn normalize_iceberg_named_versions(sql: &str) -> String {
-    ICEBERG_NAMED_VERSION_PATTERN
-        .replace_all(sql, "$1 0")
-        .into()
-}
-
-fn normalize_scalar_values(sql: &str) -> String {
-    SCALAR_VALUES_PATTERN
-        .replace_all(sql, |captures: &regex::Captures<'_>| {
-            let values = captures.get(1).unwrap().as_str();
-            let rows = values
-                .split(',')
-                .map(|value| format!("({})", value.trim()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(VALUES {rows})")
-        })
-        .into()
-}
-
-fn normalize_typed_values(sql: &str) -> String {
-    TYPED_VALUES_PATTERN
-        .replace_all(sql, "VALUES (CAST($1 AS VARCHAR))")
-        .into()
-}
-
-fn normalize_array_values(sql: &str) -> String {
-    ARRAY_VALUES_PATTERN.replace_all(sql, "VALUES ($1)").into()
-}
-
-fn normalize_function_values(sql: &str) -> String {
-    FUNCTION_VALUES_PATTERN
-        .replace_all(sql, "VALUES ($1)")
-        .into()
-}
-
 fn has_empty_from_clause(sql: &str, dialect: &dyn sqlparser::dialect::Dialect) -> bool {
     let mut tokenizer = Tokenizer::new(dialect, sql);
     let Ok(tokens) = tokenizer.tokenize() else {
@@ -203,29 +64,28 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
             Vec::new(),
         );
     }
-    let sql = if *dialect == SqlDialect::Trino {
-        normalize_top_identifiers(&normalize_ipaddress_literals(
-            &normalize_iceberg_named_versions(&normalize_iceberg_timestamp_as_of(
-                &normalize_iceberg_version_as_of(&normalize_function_values(
-                    &normalize_array_values(&normalize_typed_values(&normalize_scalar_values(
-                        &normalize_array_types(&normalize_prepare_from(sql)),
-                    ))),
-                )),
-            )),
-        ))
-    } else {
-        sql.to_string()
-    };
     let parsed = if *dialect == SqlDialect::Trino {
-        parse_trino_sql(parser.as_ref(), &sql)
+        parse_trino_sql(parser.as_ref(), sql).map(|parsed| {
+            (
+                parsed.statements,
+                parsed.inline_functions,
+                parsed.compatibility_metadata,
+            )
+        })
     } else {
-        Parser::parse_sql(parser.as_ref(), &sql)
+        Parser::parse_sql(parser.as_ref(), sql)
+            .map(|statements| (statements, Vec::new(), Vec::new()))
     };
     match parsed {
-        Ok(statements) => {
+        Ok((statements, inline_functions, compatibility_metadata)) => {
             let mut warnings = if *dialect == SqlDialect::Trino {
-                let mut warnings = find_unknown_functions(&statements);
-                find_unknown_types(&statements, &mut warnings);
+                let local_function_names = inline_function_names(&inline_functions);
+                let mut warning_statements = statements.clone();
+                warning_statements.extend(inline_functions);
+                warning_statements.extend(compatibility_metadata);
+                let mut warnings =
+                    find_unknown_functions(&warning_statements, &local_function_names);
+                find_unknown_types(&warning_statements, &mut warnings);
                 warnings
             } else {
                 Vec::new()
@@ -244,13 +104,14 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
 /// whose name is not in the Trino catalog, with the call site's line/column.
 fn find_unknown_functions(
     statements: &Vec<Statement>,
+    local_function_names: &HashSet<String>,
 ) -> Vec<(String, String, Option<usize>, Option<usize>)> {
     let mut unknown = Vec::new();
     let _ = visit_expressions(statements, |expr| {
         if let Expr::Function(func) = expr {
             if let Some(ident) = func.name.0.last().and_then(|part| part.as_ident()) {
                 let name = ident.value.to_ascii_lowercase();
-                if !is_known_trino_function(&name) {
+                if !local_function_names.contains(&name) && !is_known_trino_function(&name) {
                     let (line, column) = span_position(ident);
                     unknown.push(("function".to_string(), name, line, column));
                 }
@@ -259,6 +120,21 @@ fn find_unknown_functions(
         ControlFlow::<()>::Continue(())
     });
     unknown
+}
+
+fn inline_function_names(statements: &[Statement]) -> HashSet<String> {
+    statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::CreateFunction(function) => function
+                .name
+                .0
+                .last()
+                .and_then(|part| part.as_ident())
+                .map(|ident| ident.value.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn is_known_trino_function(name: &str) -> bool {

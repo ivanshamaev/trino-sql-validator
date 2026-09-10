@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-10
+
+### Added
+
+- Added compatibility parsing for query-scoped expression-returning `WITH
+  FUNCTION` declarations, including multiple declarations and a following CTE
+  query. Locally declared functions no longer produce unknown-function warnings.
+- Added Trino query forms that `sqlparser-rs` does not parse directly:
+  `CORRESPONDING [BY (...)]`, `PIVOT ... GROUP BY`, `NEAREST`, `ROW(...).*`
+  with output aliases, `GROUP BY ALL/DISTINCT`, `AT LOCAL`, scalar relation
+  `VALUES`, and empty `ROLLUP()` / `CUBE()` grouping elements.
+- Added a located-token compatibility layer for the supported `PREPARE`,
+  `ARRAY(type)`, `IPADDRESS`, Iceberg time-travel, `VALUES`, and identifier
+  forms. It leaves comments and string literals untouched while retaining
+  function/type warning locations.
+
+### Fixed
+
+- Preserved unknown-function and unknown-type discovery inside inline function
+  declarations, row expansions, grouping expressions, and scalar `VALUES`
+  relations with their original line and column positions.
+- Rejected false accepts for empty CTAS column lists, incomplete `TABLESAMPLE`,
+  numeric pseudo-typed literals, `WHERE FROM`, and `COUNT(DISTINCT *)`.
+- Extended the pinned Trino 483 audit to 371 accepted positive statements while
+  retaining rejection of all 23 direct negative statements and 52 of 56
+  error-suite inputs. Remaining differences are documented in the parser plan.
+
 ## [0.11.0] - 2026-09-10
 
 ### Added

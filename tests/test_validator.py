@@ -322,6 +322,210 @@ def test_create_function_checks_return_type_and_body() -> None:
     assert result.unknown_functions == ["marh"]
 
 
+def test_inline_with_function_checks_body_and_hides_local_function_names() -> None:
+    sql = (
+        "WITH\n"
+        "  FUNCTION hello(name VARCHAR)\n"
+        "  RETURNS bignum\n"
+        "  RETURN marh(name),\n"
+        "  FUNCTION bye()\n"
+        "  RETURNS BIGINT\n"
+        "  RETURN hello('x')\n"
+        "SELECT hello('Finn'), bye()"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True
+    assert result.statement_count == 1
+    assert result.unknown_types == ["bignum"]
+    assert result.unknown_functions == ["marh"]
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("bignum", 3, 11),
+        ("marh", 4, 10),
+    ]
+
+
+def test_inline_with_function_allows_a_following_cte_query() -> None:
+    result = validate(
+        "WITH FUNCTION answer() RETURNS BIGINT RETURN 42\n"
+        "WITH t AS (SELECT answer() AS value) SELECT value FROM t"
+    )
+
+    assert result.valid is True
+    assert result.statement_count == 1
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH FUNCTION answer() RETURNS BIGINT SELECT 1",
+        "WITH FUNCTION answer() RETURNS BIGINT RETURN SELECT 1",
+        "WITH FUNCTION answer() RETURNS BIGINT RETURN 1, SELECT 1",
+        "WITH FUNCTION answer() RETURNS BIGINT RETURN 1",
+    ],
+)
+def test_inline_with_function_rejects_malformed_declarations(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+def test_row_expansion_preserves_nested_warning_positions() -> None:
+    sql = (
+        "SELECT\n"
+        "  ROW(\n"
+        "    marh(1),\n"
+        "    CAST(2 AS bignum)\n"
+        "  ).* AS (first, second)"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True
+    assert result.statement_count == 1
+    assert result.unknown_functions == ["marh"]
+    assert result.unknown_types == ["bignum"]
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 3, 5),
+        ("bignum", 4, 15),
+    ]
+
+
+def test_row_expansion_supports_field_and_output_aliases() -> None:
+    result = validate("SELECT ROW(1 AS first, 2 second).* AS (left_value, right_value)")
+
+    assert result.valid is True
+    assert result.statement_count == 1
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ROW().*",
+        "SELECT ROW(1).* AS ()",
+        "SELECT ROW(1).* AS (one,)",
+        "SELECT ROW(1).* AS one",
+        "SELECT ROW(1 FROM source_table).*",
+    ],
+)
+def test_row_expansion_rejects_malformed_shapes(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+def test_group_by_quantifiers_preserve_warning_positions() -> None:
+    sql = "SELECT\n  marh(a)\nFROM t\nGROUP BY DISTINCT marh(a)"
+
+    result = validate(sql)
+
+    assert result.valid is True
+    assert result.unknown_functions == ["marh", "marh"]
+    assert [(warning.line, warning.column) for warning in result.warnings] == [(2, 3), (4, 19)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT a, sum(b) FROM t GROUP BY ALL",
+        "SELECT a, sum(b) FROM t GROUP BY DISTINCT",
+        "SELECT a, sum(b) FROM t GROUP BY ALL HAVING count(*) > 1",
+    ],
+)
+def test_group_by_quantifiers_require_grouping_elements(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+def test_empty_grouping_elements_preserve_warning_positions() -> None:
+    result = validate("SELECT 1\nFROM t\nGROUP BY ALL ROLLUP (), marh(a)")
+
+    assert result.valid is True
+    assert result.unknown_functions == ["marh"]
+    assert [(warning.line, warning.column) for warning in result.warnings] == [(3, 25)]
+
+
+def test_empty_grouping_elements_do_not_rewrite_functions_or_grouping_sets() -> None:
+    function = validate("SELECT rollup()")
+    grouping_sets = validate("SELECT 1 GROUP BY GROUPING SETS ()")
+
+    assert function.valid is True
+    assert function.unknown_functions == ["rollup"]
+    assert grouping_sets.valid is False
+
+
+def test_at_local_preserves_expression_warning_position() -> None:
+    result = validate("SELECT marh(ts) AT LOCAL")
+
+    assert result.valid is True
+    assert result.unknown_functions == ["marh"]
+    assert [(warning.line, warning.column) for warning in result.warnings] == [(1, 8)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT current_timestamp AT",
+        "SELECT current_timestamp AT UTC",
+        "SELECT current_timestamp AT TIME",
+    ],
+)
+def test_at_local_rejects_incomplete_or_unknown_modifiers(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+def test_scalar_values_relation_preserves_nested_warning_positions() -> None:
+    sql = (
+        "SELECT *\n"
+        "FROM LATERAL (\n"
+        "  VALUES\n"
+        "    marh(1),\n"
+        "    CAST(2 AS bignum)\n"
+        ")"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True
+    assert result.statement_count == 1
+    assert result.unknown_functions == ["marh"]
+    assert result.unknown_types == ["bignum"]
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 4, 5),
+        ("bignum", 5, 15),
+    ]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM LATERAL (VALUES )",
+        "SELECT * FROM LATERAL (VALUES 1,)",
+        "INSERT INTO target VALUES 1",
+    ],
+)
+def test_scalar_values_relation_rejects_malformed_or_dml_shapes(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
 def test_trino_statement_rejects_unbalanced_groups() -> None:
     result = validate("ALTER BRANCH b SET RETENTION (3")
     assert result.valid is False
@@ -332,6 +536,137 @@ def test_prepare_normalization_preserves_warning_columns() -> None:
     assert result.valid is True
     assert result.unknown_functions == ["marh"]
     assert result.warnings[0].column == 23
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM (VALUES 'one', 'two') AS t(value)",
+        "SELECT * FROM (VALUES VARCHAR 'value') AS t(value)",
+        "SELECT * FROM (VALUES ARRAY[1, 2]) AS t(value)",
+        "SELECT * FROM (VALUES map_from_entries(ARRAY[('one', 1)])) AS t(value)",
+    ],
+)
+def test_tokenized_values_compatibility_forms_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT IPADDRESS '10.0.0.1', marh(1)",
+        "SELECT * FROM customer FOR VERSION AS OF 'audit' WHERE marh(custkey)",
+        "SELECT * FROM customer FOR TIMESTAMP AS OF DATE '2022-03-23' WHERE marh(custkey)",
+        "SELECT CAST(marh(1) AS ARRAY (BIGINT))",
+    ],
+)
+def test_tokenized_compatibility_forms_preserve_warning_positions(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh"]
+    assert result.warnings[0].column == sql.index("marh") + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 AS x UNION CORRESPONDING SELECT 2 AS x",
+        "SELECT 1 AS x UNION ALL CORRESPONDING BY (x) SELECT 2 AS x",
+        "SELECT 1 AS x INTERSECT CORRESPONDING BY (x) SELECT 2 AS x",
+        "SELECT 1 AS x EXCEPT CORRESPONDING BY (x) SELECT 2 AS x",
+    ],
+)
+def test_corresponding_set_operations_validate(sql: str) -> None:
+    assert validate(sql).valid is True
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 UNION CORRESPONDING BY () SELECT 2",
+        "SELECT 1 UNION CORRESPONDING BY (x,) SELECT 2",
+        "SELECT 1 UNION CORRESPONDING BY x SELECT 2",
+    ],
+)
+def test_malformed_corresponding_set_operations_are_rejected(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+def test_corresponding_set_operations_preserve_warning_positions() -> None:
+    sql = "SELECT marh(1) AS x UNION CORRESPONDING BY (x) SELECT 2 AS x"
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh"]
+    assert result.warnings[0].column == sql.index("marh") + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM sales PIVOT (sum(amount) FOR month IN (1 AS jan) GROUP BY region)",
+        "SELECT * FROM sales PIVOT (sum(marh(amount)) FOR month IN (1 AS jan) GROUP BY region)",
+    ],
+)
+def test_pivot_group_by_validates(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    if "marh" in sql:
+        assert result.unknown_functions == ["marh"]
+        assert result.warnings[0].column == sql.index("marh") + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM sales PIVOT (sum(amount) FOR month IN (1 AS jan) GROUP region)",
+        "SELECT * FROM sales PIVOT (sum(amount) FOR month IN (1 AS jan) GROUP BY)",
+        "SELECT * FROM sales PIVOT (sum(amount) GROUP BY region FOR month IN (1 AS jan))",
+    ],
+)
+def test_malformed_pivot_group_by_is_rejected(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM trades CROSS JOIN NEAREST (FROM quotes MATCH quotes.ts <= trades.ts)",
+        "SELECT * FROM trades, NEAREST (FROM quotes WHERE quotes.symbol = trades.symbol MATCH quotes.ts <= trades.ts)",
+        "SELECT * FROM trades LEFT JOIN NEAREST (FROM quotes WHERE quotes.symbol = trades.symbol MATCH quotes.ts <= trades.ts) ON TRUE",
+    ],
+)
+def test_nearest_relations_validate(sql: str) -> None:
+    assert validate(sql).valid is True
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM trades CROSS JOIN NEAREST (quotes MATCH quotes.ts <= trades.ts)",
+        "SELECT * FROM trades CROSS JOIN NEAREST (FROM quotes WHERE quotes.symbol = trades.symbol)",
+        "SELECT * FROM trades CROSS JOIN NEAREST (FROM quotes WHERE MATCH quotes.ts <= trades.ts)",
+        "SELECT * FROM trades CROSS JOIN NEAREST (FROM quotes MATCH)",
+    ],
+)
+def test_malformed_nearest_relations_are_rejected(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+def test_nearest_relations_preserve_warning_positions() -> None:
+    sql = "SELECT * FROM trades CROSS JOIN NEAREST (FROM quotes WHERE marh(quotes.symbol) = trades.symbol MATCH marh(quotes.ts) <= trades.ts)"
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh", "marh"]
+    assert [warning.column for warning in result.warnings] == [
+        offset + 1 for offset in (sql.index("marh"), sql.rindex("marh"))
+    ]
 
 
 @pytest.mark.parametrize(
@@ -433,6 +768,17 @@ def test_trino_rejects_invalid_identifier_shapes(sql: str) -> None:
     assert validate(sql).valid is False
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE foo () AS (VALUES 1)",
+        "SELECT count(DISTINCT *) FROM (VALUES 1)",
+    ],
+)
+def test_trino_rejects_empty_ctas_columns_and_distinct_wildcard_count(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
 @pytest.mark.parametrize("sql", ["SELECT 1 x FROM dual", 'SELECT "1x"', "SELECT ''"])
 def test_valid_literals_aliases_and_quoted_identifiers_remain_valid(sql: str) -> None:
     assert validate(sql).valid is True
@@ -502,4 +848,19 @@ def test_current_trino_statement_forms_validate(sql: str) -> None:
     ],
 )
 def test_trino_statement_false_accepts_are_rejected(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "select *\nfrom x\nwhere from",
+        "CREATE TABLE foo ",
+        "SELECT a FROM a AS x TABLESAMPLE x ",
+        "SELECT foo(*) filter (",
+        "SELECT (DATE '2022-10-10', DOUBLE 12.0)",
+        "VALUES(DATE 2)",
+    ],
+)
+def test_trino_v483_syntax_false_accepts_are_rejected(sql: str) -> None:
     assert validate(sql).valid is False

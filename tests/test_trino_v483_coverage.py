@@ -49,12 +49,45 @@ SUPPORTED_SQL = {
         )
     """,
     "group_by_auto": "SELECT mktsegment, sum(acctbal) FROM shipping GROUP BY AUTO",
+    "group_by_quantifier": "SELECT a, b, sum(c) FROM t GROUP BY DISTINCT ROLLUP ((a, b), c)",
+    "empty_grouping_elements": "SELECT 1 GROUP BY ROLLUP (), CUBE ()",
+    "at_local": "SELECT timestamp '2024-01-01 12:00:00' AT LOCAL",
+    "scalar_values_relation": "SELECT * FROM LATERAL (VALUES 1, 2)",
+    "corresponding": "SELECT 1 AS x UNION CORRESPONDING BY (x) SELECT 2 AS x",
+    "pivot_group_by": """
+        SELECT *
+        FROM sales PIVOT (
+            sum(amount) AS total
+            FOR month IN (1 AS jan, 2 AS feb, 3 AS mar)
+            GROUP BY region
+        )
+    """,
+    "nearest": """
+        SELECT *
+        FROM trades
+        CROSS JOIN NEAREST (
+            FROM quotes
+            WHERE quotes.symbol = trades.symbol
+            MATCH quotes.ts <= trades.ts
+        )
+    """,
     "with_session": """
         WITH SESSION
             query_max_execution_time = '2h',
             example.query_partition_filter_required = true
         SELECT * FROM example.default.thetable LIMIT 100
     """,
+    "with_function": """
+        WITH
+            FUNCTION hello(name VARCHAR)
+                RETURNS VARCHAR
+                RETURN format('Hello %s!', name),
+            FUNCTION bye(name VARCHAR)
+                RETURNS VARCHAR
+                RETURN format('Bye %s!', name)
+        SELECT hello('Finn') || ' and ' || bye('Joe')
+    """,
+    "row_expansion": "SELECT ROW(1, 'a', true).* AS (f1, f2, f3)",
     "fetch_with_ties": "SELECT * FROM nation ORDER BY name FETCH FIRST 5 ROWS WITH TIES",
     "limit_all": "SELECT * FROM nation LIMIT ALL",
     "tablesample": "SELECT * FROM nation TABLESAMPLE BERNOULLI (10)",
@@ -145,37 +178,6 @@ SUPPORTED_SQL = {
     """,
 }
 
-DOCUMENTED_PARSER_GAPS = {
-    "with_function": """
-        WITH
-            FUNCTION hello(name VARCHAR)
-                RETURNS VARCHAR
-                RETURN format('Hello %s!', name),
-            FUNCTION bye(name VARCHAR)
-                RETURNS VARCHAR
-                RETURN format('Bye %s!', name)
-        SELECT hello('Finn') || ' and ' || bye('Joe')
-    """,
-    "pivot_group_by": """
-        SELECT *
-        FROM sales PIVOT (
-            sum(amount) AS total
-            FOR month IN (1 AS jan, 2 AS feb, 3 AS mar)
-            GROUP BY region
-        )
-    """,
-    "corresponding": "SELECT 1 AS x UNION CORRESPONDING SELECT 2 AS x",
-    "nearest": """
-        SELECT trades.symbol, trades.ts, quotes.price
-        FROM trades
-        CROSS JOIN NEAREST (
-            FROM quotes
-            WHERE quotes.symbol = trades.symbol
-            MATCH quotes.ts <= trades.ts
-        )
-    """,
-}
-
 DOCUMENTED_WARNING_REGRESSIONS = {
     "table_function_syntax": """
         SELECT *
@@ -210,16 +212,6 @@ def test_documented_trino_483_supported_syntax(feature: str, sql: str) -> None:
     assert result.valid is True, f"{feature}: {result.error}"
     assert result.statement_count == 1
     assert result.warnings == (), f"{feature}: {result.warnings}"
-
-
-@pytest.mark.xfail(strict=True, reason="documented Trino 483 parser gap planned for v0.11.0")
-@pytest.mark.parametrize(
-    ("feature", "sql"), DOCUMENTED_PARSER_GAPS.items(), ids=DOCUMENTED_PARSER_GAPS
-)
-def test_documented_trino_483_parser_gap(feature: str, sql: str) -> None:
-    result = validate(sql)
-
-    assert result.valid is True, f"{feature}: {result.error}"
 
 
 @pytest.mark.parametrize(
