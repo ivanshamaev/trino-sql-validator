@@ -1,4 +1,10 @@
-"""Executable syntax matrix derived from the official Trino 483 documentation."""
+"""Curated Trino 483 syntax matrix.
+
+Cases are adapted from Apache Trino parser tests and documentation, licensed
+under Apache-2.0. Sources:
+https://github.com/trinodb/trino/tree/483/core/trino-parser/src/test/java/io/trino/sql/parser
+https://trino.io/docs/483/
+"""
 
 from __future__ import annotations
 
@@ -204,6 +210,48 @@ DOCUMENTED_WARNING_REGRESSIONS = {
     """,
 }
 
+# One committed case per mismatch family found by the differential v0.10.0
+# baseline. The stable TSV-* identifiers are work-item IDs used by the plan and
+# by test output. The pinned direct-string subset currently has no unsupported
+# syntax gaps: all 456 extracted statement cases and all 68 types are green.
+APACHE_TRINO_483_REGRESSION_MATRIX = {
+    "TSV-P1-ICEBERG-BRANCH": "INSERT INTO orders @ dev VALUES 1",
+    "TSV-P1-ASCII-IDENTIFIERS": 'SELECT "имя" FROM orders',
+    "TSV-P2-CATALOG-DDL": "CREATE CATALOG IF NOT EXISTS hive USING hive WITH (connector = 'hive')",
+    "TSV-P2-BRANCH-DDL": "CREATE OR REPLACE BRANCH audit IN TABLE orders FROM main",
+    "TSV-P2-ALTER-NESTED-COLUMN": "ALTER TABLE orders RENAME COLUMN payload.old TO new",
+    "TSV-P2-ALTER-OWNED-ENTITY": "ALTER QUARK hive.default.orders SET AUTHORIZATION ROLE analyst",
+    "TSV-P2-ROLE-CATALOG": "CREATE ROLE analyst WITH ADMIN CURRENT_USER IN hive",
+    "TSV-P2-GRANT-ROLE": "GRANT analyst TO USER alice GRANTED BY CURRENT_ROLE IN hive",
+    "TSV-P2-GRANT-PRIVILEGE": "GRANT CREATE BRANCH ON TABLE orders TO ROLE analyst",
+    "TSV-P2-DENY-PRIVILEGE": "DENY DELETE ON TABLE orders TO USER alice",
+    "TSV-P2-SHOW-LIKE": "SHOW FUNCTIONS FROM hive.default LIKE '%$_%' ESCAPE '$'",
+    "TSV-P2-DESCRIBE-QUERY": "DESCRIBE OUTPUT (SELECT marh(1))",
+    "TSV-P2-ANALYZE-PROPERTIES": "ANALYZE orders WITH (columns = ARRAY['id'])",
+    "TSV-P2-CTAS-ALIASES": "CREATE TABLE copy(id) AS SELECT id FROM orders WITH NO DATA",
+    "TSV-P2-TABLE-LIKE": "CREATE TABLE copy (LIKE orders INCLUDING PROPERTIES)",
+    "TSV-P2-COLUMN-PROPERTIES": "CREATE TABLE t (value VARCHAR WITH (compression = 'LZ4'))",
+    "TSV-P2-VIEW-OPTIONS": "CREATE VIEW v COMMENT 'v' SECURITY DEFINER AS SELECT 1",
+    "TSV-P2-NONRESERVED": "SELECT ALL, SOME, ANY FROM orders",
+    "TSV-P2-JSON-TABLE-SCALAR": (
+        "SELECT * FROM JSON_TABLE(payload, '$' COLUMNS("
+        "value VARCHAR FORMAT JSON ENCODING UTF16 PATH '$.value' "
+        "WITH WRAPPER KEEP QUOTES EMPTY ARRAY ON EMPTY) EMPTY ON ERROR)"
+    ),
+    "TSV-P3-WITH-SESSION": "WITH SESSION query_max_execution_time = '2h' SELECT 1",
+    "TSV-P3-CORRESPONDING": "SELECT 1 AS x UNION CORRESPONDING BY (x) SELECT 2 AS x",
+    "TSV-P3-PIVOT-GROUP": "SELECT * FROM t PIVOT (sum(v) FOR k IN (1) GROUP BY g)",
+    "TSV-P3-NEAREST": "SELECT * FROM a CROSS JOIN NEAREST (FROM b MATCH b.ts <= a.ts)",
+    "TSV-P3-ROW-EXPANSION": "SELECT ROW(1, 2).* AS (x, y)",
+    "TSV-P3-TABLE-FUNCTION": (
+        "SELECT * FROM TABLE(f(input => TABLE(orders) AS o "
+        "PARTITION BY (id) KEEP WHEN EMPTY ORDER BY (id)))"
+    ),
+    "TSV-P4-EXPRESSION": "SELECT bigint::parse(value => '42') BETWEEN SYMMETRIC 1 AND 100",
+    "TSV-P4-STRUCTURAL-TYPE": "SELECT CAST(NULL AS MAP<BIGINT, VARCHAR> ARRAY)",
+    "TSV-P4-ROUTINE": "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN x + 1",
+}
+
 
 @pytest.mark.parametrize(("feature", "sql"), SUPPORTED_SQL.items(), ids=SUPPORTED_SQL)
 def test_documented_trino_483_supported_syntax(feature: str, sql: str) -> None:
@@ -224,3 +272,15 @@ def test_documented_trino_483_warning_regression(feature: str, sql: str) -> None
 
     assert result.valid is True, f"{feature}: {result.error}"
     assert result.warnings == (), f"{feature}: {result.warnings}"
+
+
+@pytest.mark.parametrize(
+    ("work_item", "sql"),
+    APACHE_TRINO_483_REGRESSION_MATRIX.items(),
+    ids=APACHE_TRINO_483_REGRESSION_MATRIX,
+)
+def test_apache_trino_483_regression_matrix(work_item: str, sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, f"{work_item}: {result.error}"
+    assert result.statement_count == 1

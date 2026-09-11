@@ -85,13 +85,20 @@
   mismatches and remaining table-function/routine grammar work are explicit in
   `plan/v0.11.0_SqlParser.md`.
 
+## v0.13.0 — parser-plan completion
+- Completed statement, expression, structural type, and SQL routine work from
+  `plan/v0.11.0_SqlParser.md`, including strict malformed neighbors and source
+  position preservation.
+- The pinned Trino 483 direct-string audit is 456/456 statements, 231/232
+  expressions (the residual item is an empty extractor artifact), 68/68 types,
+  and 23/23 direct negative statements. The separate error suite remains 52/56:
+  its four differences are the intentional empty-file API and three semantic
+  checks outside syntax validation.
+- Trino master at `b2581fb32fcb` is tracked separately from the release pin and
+  passes all 458 extracted statement cases. PrestoDB
+  0.299 remains a non-target comparison corpus.
+
 ## Next — clearer Trino cursor
-- Add table-function table-argument aliases and organization clauses, then
-  broaden malformed-neighbor and source-position regression coverage for every
-  compatibility production.
-- Enrich `TrinoDialect` overrides for remaining commonly misparsed Trino-specific
-  syntax, especially routine characteristics, dollar bodies, compound routines,
-  and broader statement/type grammar.
 - Cover connector `CALL` signatures structurally without claiming semantic argument
   validation.
 - Surface statement *type* (SELECT/DDL/...) from the parsed AST to the Python

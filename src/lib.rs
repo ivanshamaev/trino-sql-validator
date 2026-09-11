@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use sqlparser::ast::visit_expressions;
 use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, Statement};
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -52,7 +53,8 @@ fn has_empty_from_clause(sql: &str, dialect: &dyn sqlparser::dialect::Dialect) -
     })
 }
 
-pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
+fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
+    let sql = sql.strip_prefix('\u{feff}').unwrap_or(sql);
     let parser = dialect.parser();
     if *dialect == SqlDialect::Trino && has_empty_from_clause(sql, parser.as_ref()) {
         return (
@@ -70,14 +72,16 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
                 parsed.statements,
                 parsed.inline_functions,
                 parsed.compatibility_metadata,
+                parsed.custom_statement_kinds,
             )
         })
     } else {
         Parser::parse_sql(parser.as_ref(), sql)
-            .map(|statements| (statements, Vec::new(), Vec::new()))
+            .map(|statements| (statements, Vec::new(), Vec::new(), Vec::new()))
     };
     match parsed {
-        Ok((statements, inline_functions, compatibility_metadata)) => {
+        Ok((statements, inline_functions, compatibility_metadata, custom_statement_kinds)) => {
+            debug_assert!(custom_statement_kinds.len() <= statements.len());
             let mut warnings = if *dialect == SqlDialect::Trino {
                 let local_function_names = inline_function_names(&inline_functions);
                 let mut warning_statements = statements.clone();
@@ -98,6 +102,19 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
             (false, 0, Some(message), line, column, Vec::new())
         }
     }
+}
+
+pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
+    catch_unwind(AssertUnwindSafe(|| validate_sql_inner(sql, dialect))).unwrap_or_else(|_| {
+        (
+            false,
+            0,
+            Some("sql parser error: parser failed safely".to_string()),
+            None,
+            None,
+            Vec::new(),
+        )
+    })
 }
 
 /// Walk every expression in the parsed statements and collect function calls
@@ -198,6 +215,11 @@ fn find_unknown_types(
                 }
             }
             Statement::CreateFunction(func) => {
+                if let Some(args) = &func.args {
+                    for arg in args {
+                        collect_type_entries(&arg.data_type, warnings);
+                    }
+                }
                 if let Some(return_type) = &func.return_type {
                     match return_type {
                         sqlparser::ast::FunctionReturnType::DataType(data_type)
@@ -754,10 +776,10 @@ mod tests {
     }
 
     #[test]
-    fn trino_rejects_generic_angle_map_type_syntax() {
+    fn trino_accepts_legacy_angle_map_type_syntax() {
         let (valid, _, _, _, _, _) =
             validate_sql_impl("CREATE TABLE t (value map<varchar, bigint>)", &trino());
-        assert!(!valid);
+        assert!(valid);
     }
 
     #[test]

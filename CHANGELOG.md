@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-09-11
+
+### Added
+
+- Completed the pinned Trino 483 parser matrix: all 456 extracted statement
+  cases and all 68 extracted type cases now validate, while all 23 direct
+  negative statements remain rejected.
+- Added current Trino role and privilege statements, nested-column `ALTER`,
+  CTAS aliases and data disposition, table `LIKE`/column properties, `ANALYZE`
+  properties, view comment/security options, scalar `JSON_TABLE` clauses, and
+  structural SQL routine bodies.
+- Added an Apache-attributed regression matrix with stable work-item IDs and
+  resource-safety coverage for backtracking, excessive nesting, BOM/CRLF,
+  comments, escaped strings, and adjacent Jinja templates.
+
+### Fixed
+
+- Made unambiguous Trino-only statement prefixes strict, with balanced groups
+  and trailing-token checks instead of permissive parser fallback.
+- Preserved function/type warning traversal and original source locations for
+  compatibility-parsed statements, expressions, types, and routines.
+- Bounded parser nesting and converted unexpected Rust parser panics into an
+  invalid result at the PyO3 boundary.
+
 ## [0.12.0] - 2026-09-10
 
 ### Added

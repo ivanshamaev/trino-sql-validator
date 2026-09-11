@@ -1,4 +1,7 @@
-use sqlparser::ast::{CreateFunction, CreateFunctionBody, FunctionReturnType, Statement};
+use sqlparser::ast::{
+    CreateFunction, CreateFunctionBody, Expr, FunctionCalledOnNull, FunctionDeterminismSpecifier,
+    FunctionReturnType, FunctionSecurity, OperateFunctionArg, Statement, Value,
+};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
@@ -16,73 +19,88 @@ pub(crate) fn try_parse_statement(p: &mut Parser) -> Option<Result<Statement, Pa
         Token::Word(w) => w.keyword,
         _ => return None,
     };
-    let parsed = match keyword {
+    match keyword {
         Keyword::ALTER => {
-            if is_trino_property_alter(p) {
-                return Some(parse_alter(p));
+            if is_trino_alter(p) || is_trino_owned_entity_alter(p) {
+                Some(parse_located(p, parse_alter))
+            } else {
+                None
             }
-            p.maybe_parse(parse_alter).ok().flatten()
         }
         Keyword::CREATE => {
             // `CREATE FUNCTION` (Trino shape) is handled deterministically so a
             // missing `RETURNS`/`RETURN` reports an error instead of silently
             // falling through to sqlparser's (different) CREATE FUNCTION.
             if is_trino_create_function(p) {
-                return Some(parse_create_function(p));
+                Some(parse_located(p, parse_create_function))
+            } else if is_trino_create(p) {
+                Some(parse_located(p, parse_create))
+            } else {
+                None
             }
-            if is_trino_create(p) {
-                return Some(parse_create(p));
-            }
-            p.maybe_parse(parse_create).ok().flatten()
         }
         Keyword::DESCRIBE => {
             // A plain `DESCRIBE <table>` goes to sqlparser; `DESCRIBE INPUT/
             // OUTPUT` is Trino-only and handled strictly so a missing name is
             // not mistaken for a table called `input`.
             if is_trino_describe(p) {
-                return Some(parse_describe(p));
+                Some(parse_located(p, parse_describe))
+            } else {
+                None
             }
-            p.maybe_parse(parse_describe).ok().flatten()
         }
-        Keyword::DROP => p.maybe_parse(parse_drop).ok().flatten(),
-        Keyword::GRANT => p.maybe_parse(parse_grant_roles).ok().flatten(),
-        Keyword::REFRESH => p
-            .maybe_parse(parse_refresh_materialized_view)
-            .ok()
-            .flatten(),
+        Keyword::DENY => Some(parse_located(p, parse_deny)),
+        Keyword::DROP => {
+            if is_trino_drop(p) {
+                Some(parse_located(p, parse_drop))
+            } else {
+                None
+            }
+        }
+        Keyword::GRANT => Some(parse_located(p, parse_grant)),
+        Keyword::REFRESH if is_trino_refresh_materialized_view(p) => {
+            Some(parse_located(p, parse_refresh_materialized_view))
+        }
         Keyword::RESET => {
             // `RESET SESSION` is Trino-only; handle strictly so a bare
             // `RESET SESSION` (no name, no AUTHORIZATION) is rejected rather
             // than accepted by sqlparser's permissive fallback.
             if is_trino_reset_session(p) {
-                return Some(parse_reset_session(p));
+                Some(parse_located(p, parse_reset_session))
+            } else {
+                None
             }
-            p.maybe_parse(parse_reset_session).ok().flatten()
         }
-        Keyword::REVOKE => p.maybe_parse(parse_revoke_roles).ok().flatten(),
+        Keyword::REVOKE => Some(parse_located(p, parse_revoke)),
         Keyword::SET => {
-            if is_trino_set_path(p) {
-                return Some(parse_set_path(p));
+            if is_trino_set_role(p) {
+                Some(parse_located(p, parse_set_role))
+            } else if is_trino_set_path(p) {
+                Some(parse_located(p, parse_set_path))
+            } else if is_trino_set_session_authorization(p) {
+                Some(parse_located(p, parse_set_session_authorization))
+            } else {
+                None
             }
-            if is_trino_set_session_authorization(p) {
-                return Some(parse_set_session_authorization(p));
-            }
-            p.maybe_parse(parse_set_path).ok().flatten()
         }
         Keyword::SHOW => {
             if is_trino_show(p) {
-                return Some(parse_show(p));
+                Some(parse_located(p, parse_show))
+            } else if is_trino_show_create(p) {
+                Some(parse_located(p, parse_show_create))
+            } else {
+                None
             }
-            p.maybe_parse(parse_show_create).ok().flatten()
         }
         Keyword::EXPLAIN if is_unquoted_word_at(p, 1, "verbose") => {
-            return Some(Err(ParserError::ParserError(
-                "EXPLAIN VERBOSE requires ANALYZE".into(),
-            )));
+            let location = p.peek_nth_token(1).span.start;
+            Some(Err(ParserError::ParserError(format!(
+                "EXPLAIN VERBOSE requires ANALYZE at Line: {}, Column: {}",
+                location.line, location.column
+            ))))
         }
-        _ => return None,
-    };
-    parsed.map(Ok)
+        _ => None,
+    }
 }
 
 /// `CREATE [OR REPLACE] [TEMP|TEMPORARY] FUNCTION <name> (`
@@ -107,6 +125,23 @@ fn is_unquoted_word_at(p: &Parser, index: usize, expected: &str) -> bool {
     )
 }
 
+fn parse_located(
+    p: &mut Parser,
+    parse: fn(&mut Parser) -> Result<Statement, ParserError>,
+) -> Result<Statement, ParserError> {
+    let result = parse(p);
+    result.map_err(|error| match error {
+        ParserError::ParserError(message) if !message.contains("at Line:") => {
+            let location = p.peek_token_ref().span.start;
+            ParserError::ParserError(format!(
+                "{message} at Line: {}, Column: {}",
+                location.line, location.column
+            ))
+        }
+        other => other,
+    })
+}
+
 fn is_trino_create(p: &Parser) -> bool {
     let mut index = 1;
     if is_unquoted_word_at(p, index, "or") {
@@ -116,7 +151,15 @@ fn is_trino_create(p: &Parser) -> bool {
         }
         index += 1;
     }
-    is_unquoted_word_at(p, index, "branch") || is_unquoted_word_at(p, index, "catalog")
+    is_unquoted_word_at(p, index, "branch")
+        || is_unquoted_word_at(p, index, "catalog")
+        || is_unquoted_word_at(p, index, "role")
+}
+
+fn is_trino_drop(p: &Parser) -> bool {
+    is_unquoted_word_at(p, 1, "branch")
+        || is_unquoted_word_at(p, 1, "catalog")
+        || is_unquoted_word_at(p, 1, "role")
 }
 
 fn is_trino_property_alter(p: &Parser) -> bool {
@@ -149,6 +192,30 @@ fn is_trino_property_alter(p: &Parser) -> bool {
     is_unquoted_word_at(p, index, "set") && is_unquoted_word_at(p, index + 1, "properties")
 }
 
+fn is_trino_alter(p: &Parser) -> bool {
+    is_trino_property_alter(p)
+        || is_unquoted_word_at(p, 1, "table")
+        || is_unquoted_word_at(p, 1, "view")
+        || is_unquoted_word_at(p, 1, "branch")
+        || (is_unquoted_word_at(p, 1, "materialized") && is_unquoted_word_at(p, 2, "view"))
+}
+
+fn is_trino_owned_entity_alter(p: &Parser) -> bool {
+    if !matches!(p.peek_nth_token(1).token, Token::Word(_))
+        || !matches!(p.peek_nth_token(2).token, Token::Word(_))
+    {
+        return false;
+    }
+    let mut index = 3;
+    while p.peek_nth_token(index).token == Token::Period {
+        if !matches!(p.peek_nth_token(index + 1).token, Token::Word(_)) {
+            return false;
+        }
+        index += 2;
+    }
+    is_unquoted_word_at(p, index, "set") && is_unquoted_word_at(p, index + 1, "authorization")
+}
+
 /// Placeholder returned for recognized Trino-only statements. Only the count
 /// matters downstream; nothing inspects the contents.
 fn placeholder() -> Statement {
@@ -179,70 +246,6 @@ fn end_of_statement(p: &mut Parser) -> Result<(), ParserError> {
         other => Err(ParserError::ParserError(format!(
             "unexpected trailing token {other} in Trino statement"
         ))),
-    }
-}
-
-/// Consume every token up to the end of the statement (a `;` or EOF at nesting
-/// depth 0), keeping `()`, `[]` and `{}` balanced. The trailing `;` is left for
-/// the caller.
-fn consume_to_end(p: &mut Parser) -> Result<(), ParserError> {
-    let mut depth: i64 = 0;
-    loop {
-        match p.peek_token_ref().token.clone() {
-            Token::EOF => {
-                if depth == 0 {
-                    return Ok(());
-                }
-                return Err(ParserError::ParserError(
-                    "unterminated group in Trino statement".into(),
-                ));
-            }
-            Token::SemiColon if depth == 0 => return Ok(()),
-            Token::LParen | Token::LBracket | Token::LBrace => {
-                depth += 1;
-                p.next_token();
-            }
-            Token::RParen | Token::RBracket | Token::RBrace => {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(ParserError::ParserError(
-                        "unbalanced closing bracket in Trino statement".into(),
-                    ));
-                }
-                p.next_token();
-            }
-            _ => {
-                p.next_token();
-            }
-        }
-    }
-}
-
-/// Consume a balanced `(...)` group including its outer parentheses.
-fn consume_balanced_parens(p: &mut Parser) -> Result<(), ParserError> {
-    let mut depth = 1u32;
-    loop {
-        match p.peek_token_ref().token.clone() {
-            Token::EOF => {
-                return Err(ParserError::ParserError(
-                    "unterminated group in Trino statement".into(),
-                ))
-            }
-            Token::LParen => {
-                depth += 1;
-                p.next_token();
-            }
-            Token::RParen => {
-                depth -= 1;
-                p.next_token();
-                if depth == 0 {
-                    return Ok(());
-                }
-            }
-            _ => {
-                p.next_token();
-            }
-        }
     }
 }
 
@@ -287,6 +290,10 @@ fn is_trino_set_session_authorization(p: &Parser) -> bool {
     is_unquoted_word_at(p, 1, "session") && is_unquoted_word_at(p, 2, "authorization")
 }
 
+fn is_trino_set_role(p: &Parser) -> bool {
+    is_unquoted_word_at(p, 1, "role")
+}
+
 fn is_trino_show(p: &Parser) -> bool {
     [
         "catalogs",
@@ -298,6 +305,16 @@ fn is_trino_show(p: &Parser) -> bool {
     ]
     .iter()
     .any(|word| is_unquoted_word_at(p, 1, word))
+}
+
+fn is_trino_show_create(p: &Parser) -> bool {
+    is_unquoted_word_at(p, 1, "create")
+        && (is_unquoted_word_at(p, 2, "schema")
+            || (is_unquoted_word_at(p, 2, "materialized") && is_unquoted_word_at(p, 3, "view")))
+}
+
+fn is_trino_refresh_materialized_view(p: &Parser) -> bool {
+    is_unquoted_word_at(p, 1, "materialized") && is_unquoted_word_at(p, 2, "view")
 }
 
 fn parse_reset_session(p: &mut Parser) -> Result<Statement, ParserError> {
@@ -344,7 +361,9 @@ fn parse_set_session_authorization(p: &mut Parser) -> Result<Statement, ParserEr
         Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_) => {
             p.next_token();
         }
-        Token::Word(word) if word.value.eq_ignore_ascii_case("null") => {
+        Token::Word(word)
+            if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("null") =>
+        {
             return Err(ParserError::ParserError(
                 "SET SESSION AUTHORIZATION does not accept NULL".into(),
             ));
@@ -352,6 +371,19 @@ fn parse_set_session_authorization(p: &mut Parser) -> Result<Statement, ParserEr
         _ => {
             p.parse_identifier()?;
         }
+    }
+    end_of_statement(p)?;
+    Ok(placeholder())
+}
+
+fn parse_set_role(p: &mut Parser) -> Result<Statement, ParserError> {
+    p.expect_keyword(Keyword::SET)?;
+    p.expect_keyword(Keyword::ROLE)?;
+    if !(opt_kw(p, Keyword::ALL) || opt_kw(p, Keyword::NONE)) {
+        p.parse_identifier()?;
+    }
+    if opt_kw(p, Keyword::IN) {
+        p.parse_identifier()?;
     }
     end_of_statement(p)?;
     Ok(placeholder())
@@ -447,16 +479,19 @@ fn parse_describe(p: &mut Parser) -> Result<Statement, ParserError> {
             "not a Trino DESCRIBE INPUT/OUTPUT statement".into(),
         ));
     }
-    if p.consume_token(&Token::LParen) {
-        consume_balanced_parens(p)?;
+    let query = if p.consume_token(&Token::LParen) {
+        let query = p.parse_query()?;
+        p.expect_token(&Token::RParen)?;
+        Some(query)
     } else {
         p.parse_object_name(true)?;
-    }
+        None
+    };
     if opt_kw(p, Keyword::WHERE) {
-        consume_to_end(p)?;
+        p.parse_expr()?;
     }
     end_of_statement(p)?;
-    Ok(placeholder())
+    Ok(query.map_or_else(placeholder, Statement::Query))
 }
 
 fn parse_refresh_materialized_view(p: &mut Parser) -> Result<Statement, ParserError> {
@@ -486,6 +521,9 @@ fn parse_create(p: &mut Parser) -> Result<Statement, ParserError> {
     }
     if opt_kw(p, Keyword::CATALOG) {
         return parse_create_catalog(p);
+    }
+    if opt_kw(p, Keyword::ROLE) {
+        return parse_create_role(p);
     }
     Err(ParserError::ParserError(
         "not a Trino-only CREATE statement".into(),
@@ -526,10 +564,249 @@ fn parse_trino_string(p: &mut Parser) -> Result<(), ParserError> {
 }
 
 fn parse_principal(p: &mut Parser) -> Result<(), ParserError> {
-    opt_kw(p, Keyword::USER);
-    opt_kw(p, Keyword::ROLE);
+    if !opt_kw(p, Keyword::USER) {
+        opt_kw(p, Keyword::ROLE);
+    }
     p.parse_identifier()?;
     Ok(())
+}
+
+fn parse_grantor(p: &mut Parser) -> Result<(), ParserError> {
+    if opt_kw(p, Keyword::CURRENT_USER) || opt_kw(p, Keyword::CURRENT_ROLE) {
+        return Ok(());
+    }
+    parse_principal(p)
+}
+
+fn parse_create_role(p: &mut Parser) -> Result<Statement, ParserError> {
+    p.parse_identifier()?;
+    if opt_kw(p, Keyword::WITH) {
+        p.expect_keyword(Keyword::ADMIN)?;
+        parse_grantor(p)?;
+    }
+    if opt_kw(p, Keyword::IN) {
+        p.parse_identifier()?;
+    }
+    end_of_statement(p)?;
+    Ok(placeholder())
+}
+
+fn parse_routine_arguments(p: &mut Parser) -> Result<Vec<OperateFunctionArg>, ParserError> {
+    p.expect_token(&Token::LParen)?;
+    let mut arguments = Vec::new();
+    if p.consume_token(&Token::RParen) {
+        return Ok(arguments);
+    }
+    loop {
+        let named = p.maybe_parse(|p| {
+            let name = p.parse_identifier()?;
+            let data_type = p.parse_data_type()?;
+            if !matches!(p.peek_token_ref().token, Token::Comma | Token::RParen) {
+                return Err(ParserError::ParserError(
+                    "unexpected token after routine parameter type".into(),
+                ));
+            }
+            Ok(OperateFunctionArg {
+                mode: None,
+                name: Some(name),
+                data_type,
+                default_expr: None,
+            })
+        })?;
+        arguments.push(match named {
+            Some(argument) => argument,
+            None => OperateFunctionArg::unnamed(p.parse_data_type()?),
+        });
+        if p.consume_token(&Token::Comma) {
+            if p.peek_token_ref().token == Token::RParen {
+                return Err(ParserError::ParserError(
+                    "routine parameter list cannot end with a comma".into(),
+                ));
+            }
+            continue;
+        }
+        p.expect_token(&Token::RParen)?;
+        return Ok(arguments);
+    }
+}
+
+fn at_control_terminator(p: &Parser, words: &[&str]) -> bool {
+    words.iter().any(|word| is_unquoted_word_at(p, 0, word))
+}
+
+fn parse_control_list(
+    p: &mut Parser,
+    terminators: &[&str],
+    arguments: &mut Vec<OperateFunctionArg>,
+    expressions: &mut Vec<Expr>,
+    required: bool,
+) -> Result<(), ParserError> {
+    let mut count = 0usize;
+    while !at_control_terminator(p, terminators) {
+        if matches!(p.peek_token_ref().token, Token::EOF | Token::SemiColon) {
+            return Err(ParserError::ParserError(
+                "unterminated SQL routine control statement".into(),
+            ));
+        }
+        parse_control_statement(p, arguments, expressions)?;
+        p.expect_token(&Token::SemiColon)?;
+        count += 1;
+    }
+    if required && count == 0 {
+        return Err(ParserError::ParserError(
+            "SQL routine control block requires a statement".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_variable_declaration(
+    p: &mut Parser,
+    arguments: &mut Vec<OperateFunctionArg>,
+    expressions: &mut Vec<Expr>,
+) -> Result<(), ParserError> {
+    let mut names = vec![p.parse_identifier()?];
+    while p.consume_token(&Token::Comma) {
+        names.push(p.parse_identifier()?);
+    }
+    let data_type = p.parse_data_type()?;
+    if consume_word(p, "default") {
+        expressions.push(p.parse_expr()?);
+    }
+    p.expect_token(&Token::SemiColon)?;
+    for name in names {
+        arguments.push(OperateFunctionArg {
+            mode: None,
+            name: Some(name),
+            data_type: data_type.clone(),
+            default_expr: None,
+        });
+    }
+    Ok(())
+}
+
+fn consume_control_label(p: &mut Parser) -> Result<(), ParserError> {
+    if matches!(p.peek_token_ref().token, Token::Word(_))
+        && p.peek_nth_token(1).token == Token::Colon
+    {
+        p.parse_identifier()?;
+        p.expect_token(&Token::Colon)?;
+    }
+    Ok(())
+}
+
+fn parse_control_statement(
+    p: &mut Parser,
+    arguments: &mut Vec<OperateFunctionArg>,
+    expressions: &mut Vec<Expr>,
+) -> Result<(), ParserError> {
+    if consume_word(p, "return") {
+        expressions.push(p.parse_expr()?);
+        return Ok(());
+    }
+    if consume_word(p, "set") {
+        p.parse_identifier()?;
+        p.expect_token(&Token::Eq)?;
+        expressions.push(p.parse_expr()?);
+        return Ok(());
+    }
+    if consume_word(p, "iterate") || consume_word(p, "leave") {
+        p.parse_identifier()?;
+        return Ok(());
+    }
+    if consume_word(p, "begin") {
+        while consume_word(p, "declare") {
+            parse_variable_declaration(p, arguments, expressions)?;
+        }
+        parse_control_list(p, &["end"], arguments, expressions, false)?;
+        if !consume_word(p, "end") {
+            return Err(ParserError::ParserError(
+                "compound routine body requires END".into(),
+            ));
+        }
+        return Ok(());
+    }
+    if consume_word(p, "if") {
+        expressions.push(p.parse_expr()?);
+        if !consume_word(p, "then") {
+            return Err(ParserError::ParserError("IF requires THEN".into()));
+        }
+        parse_control_list(p, &["elseif", "else", "end"], arguments, expressions, true)?;
+        while consume_word(p, "elseif") {
+            expressions.push(p.parse_expr()?);
+            if !consume_word(p, "then") {
+                return Err(ParserError::ParserError("ELSEIF requires THEN".into()));
+            }
+            parse_control_list(p, &["elseif", "else", "end"], arguments, expressions, true)?;
+        }
+        if consume_word(p, "else") {
+            parse_control_list(p, &["end"], arguments, expressions, true)?;
+        }
+        if !consume_word(p, "end") || !consume_word(p, "if") {
+            return Err(ParserError::ParserError("IF requires END IF".into()));
+        }
+        return Ok(());
+    }
+    if consume_word(p, "case") {
+        if !is_unquoted_word_at(p, 0, "when") {
+            expressions.push(p.parse_expr()?);
+        }
+        let mut branches = 0usize;
+        while consume_word(p, "when") {
+            expressions.push(p.parse_expr()?);
+            if !consume_word(p, "then") {
+                return Err(ParserError::ParserError("CASE WHEN requires THEN".into()));
+            }
+            parse_control_list(p, &["when", "else", "end"], arguments, expressions, true)?;
+            branches += 1;
+        }
+        if branches == 0 {
+            return Err(ParserError::ParserError("CASE requires WHEN".into()));
+        }
+        if consume_word(p, "else") {
+            parse_control_list(p, &["end"], arguments, expressions, true)?;
+        }
+        if !consume_word(p, "end") || !consume_word(p, "case") {
+            return Err(ParserError::ParserError("CASE requires END CASE".into()));
+        }
+        return Ok(());
+    }
+
+    consume_control_label(p)?;
+    if consume_word(p, "loop") {
+        parse_control_list(p, &["end"], arguments, expressions, true)?;
+        if !consume_word(p, "end") || !consume_word(p, "loop") {
+            return Err(ParserError::ParserError("LOOP requires END LOOP".into()));
+        }
+        return Ok(());
+    }
+    if consume_word(p, "while") {
+        expressions.push(p.parse_expr()?);
+        if !consume_word(p, "do") {
+            return Err(ParserError::ParserError("WHILE requires DO".into()));
+        }
+        parse_control_list(p, &["end"], arguments, expressions, true)?;
+        if !consume_word(p, "end") || !consume_word(p, "while") {
+            return Err(ParserError::ParserError("WHILE requires END WHILE".into()));
+        }
+        return Ok(());
+    }
+    if consume_word(p, "repeat") {
+        parse_control_list(p, &["until"], arguments, expressions, true)?;
+        if !consume_word(p, "until") {
+            return Err(ParserError::ParserError("REPEAT requires UNTIL".into()));
+        }
+        expressions.push(p.parse_expr()?);
+        if !consume_word(p, "end") || !consume_word(p, "repeat") {
+            return Err(ParserError::ParserError(
+                "REPEAT requires END REPEAT".into(),
+            ));
+        }
+        return Ok(());
+    }
+    Err(ParserError::ParserError(
+        "expected a SQL routine control statement".into(),
+    ))
 }
 
 fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
@@ -546,50 +823,159 @@ fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
     };
     p.expect_keyword(Keyword::FUNCTION)?;
     let name = p.parse_object_name(true)?;
-    p.expect_token(&Token::LParen)?;
-    consume_balanced_parens(p)?;
+    let mut args = parse_routine_arguments(p)?;
     p.expect_keyword(Keyword::RETURNS)?;
     let return_type = p.parse_data_type()?;
-    // return type + any option clauses up to the mandatory `RETURN`
-    // expression. `RETURNS` is a distinct keyword from `RETURN`, so scanning
-    // for `RETURN` is unambiguous.
+    let mut language = None;
+    let mut determinism_specifier = None;
+    let mut called_on_null = None;
+    let mut security = None;
+    let mut comment = false;
+    let function_body;
     loop {
-        match p.peek_token_ref().token.clone() {
-            Token::Word(w) if w.keyword == Keyword::RETURN => {
-                p.next_token();
-                let body = p.parse_expr()?;
-                end_of_statement(p)?;
-                return Ok(Statement::CreateFunction(CreateFunction {
-                    or_alter: false,
-                    or_replace,
-                    temporary,
-                    if_not_exists: false,
-                    name,
-                    args: None,
-                    return_type: Some(FunctionReturnType::DataType(return_type)),
-                    function_body: Some(CreateFunctionBody::Return(body)),
-                    behavior: None,
-                    called_on_null: None,
-                    parallel: None,
-                    security: None,
-                    set_params: Vec::new(),
-                    using: None,
-                    language: None,
-                    determinism_specifier: None,
-                    options: None,
-                    remote_connection: None,
-                }));
-            }
-            Token::EOF | Token::SemiColon => {
-                return Err(ParserError::ParserError(
-                    "CREATE FUNCTION is missing its RETURN expression".into(),
-                ))
-            }
-            _ => {
-                p.next_token();
-            }
+        if consume_word(p, "return") {
+            function_body = Some(CreateFunctionBody::Return(p.parse_expr()?));
+            break;
         }
+        if is_unquoted_word_at(p, 0, "begin") {
+            let mut expressions = Vec::new();
+            parse_control_statement(p, &mut args, &mut expressions)?;
+            function_body = Some(CreateFunctionBody::Return(Expr::Tuple(expressions)));
+            break;
+        }
+        if consume_word(p, "as") {
+            let token = p.next_token();
+            let Token::DollarQuotedString(body) = token.token else {
+                return Err(ParserError::ParserError(
+                    "AS routine body requires an untagged dollar string".into(),
+                ));
+            };
+            if body.tag.is_some() {
+                return Err(ParserError::ParserError(
+                    "Trino routine dollar bodies do not support tags".into(),
+                ));
+            }
+            function_body = Some(CreateFunctionBody::AsBeforeOptions {
+                body: Expr::Value(Value::DollarQuotedString(body).with_span(token.span)),
+                link_symbol: None,
+            });
+            break;
+        }
+        if consume_word(p, "language") {
+            if language.is_some() {
+                return Err(ParserError::ParserError(
+                    "duplicate LANGUAGE routine characteristic".into(),
+                ));
+            }
+            language = Some(p.parse_identifier()?);
+            continue;
+        }
+        if consume_word(p, "not") {
+            if !consume_word(p, "deterministic") || determinism_specifier.is_some() {
+                return Err(ParserError::ParserError(
+                    "invalid NOT DETERMINISTIC routine characteristic".into(),
+                ));
+            }
+            determinism_specifier = Some(FunctionDeterminismSpecifier::NotDeterministic);
+            continue;
+        }
+        if consume_word(p, "deterministic") {
+            if determinism_specifier.is_some() {
+                return Err(ParserError::ParserError(
+                    "duplicate DETERMINISTIC routine characteristic".into(),
+                ));
+            }
+            determinism_specifier = Some(FunctionDeterminismSpecifier::Deterministic);
+            continue;
+        }
+        if consume_word(p, "returns") {
+            if called_on_null.is_some()
+                || !consume_word(p, "null")
+                || !consume_word(p, "on")
+                || !consume_word(p, "null")
+                || !consume_word(p, "input")
+            {
+                return Err(ParserError::ParserError(
+                    "invalid RETURNS NULL ON NULL INPUT routine characteristic".into(),
+                ));
+            }
+            called_on_null = Some(FunctionCalledOnNull::ReturnsNullOnNullInput);
+            continue;
+        }
+        if consume_word(p, "called") {
+            if called_on_null.is_some()
+                || !consume_word(p, "on")
+                || !consume_word(p, "null")
+                || !consume_word(p, "input")
+            {
+                return Err(ParserError::ParserError(
+                    "invalid CALLED ON NULL INPUT routine characteristic".into(),
+                ));
+            }
+            called_on_null = Some(FunctionCalledOnNull::CalledOnNullInput);
+            continue;
+        }
+        if consume_word(p, "security") {
+            if security.is_some() {
+                return Err(ParserError::ParserError(
+                    "duplicate SECURITY routine characteristic".into(),
+                ));
+            }
+            security = if consume_word(p, "definer") {
+                Some(FunctionSecurity::Definer)
+            } else if consume_word(p, "invoker") {
+                Some(FunctionSecurity::Invoker)
+            } else {
+                return Err(ParserError::ParserError(
+                    "SECURITY requires DEFINER or INVOKER".into(),
+                ));
+            };
+            continue;
+        }
+        if consume_word(p, "comment") {
+            if comment {
+                return Err(ParserError::ParserError(
+                    "duplicate COMMENT routine characteristic".into(),
+                ));
+            }
+            parse_trino_string(p)?;
+            comment = true;
+            continue;
+        }
+        if consume_word(p, "with") {
+            parse_properties(p, true)?;
+            continue;
+        }
+        if matches!(p.peek_token_ref().token, Token::EOF | Token::SemiColon) {
+            return Err(ParserError::ParserError(
+                "CREATE FUNCTION is missing its routine body".into(),
+            ));
+        }
+        return Err(ParserError::ParserError(
+            "invalid CREATE FUNCTION routine characteristic or body".into(),
+        ));
     }
+    end_of_statement(p)?;
+    Ok(Statement::CreateFunction(CreateFunction {
+        or_alter: false,
+        or_replace,
+        temporary,
+        if_not_exists: false,
+        name,
+        args: Some(args),
+        return_type: Some(FunctionReturnType::DataType(return_type)),
+        function_body,
+        behavior: None,
+        called_on_null,
+        parallel: None,
+        security,
+        set_params: Vec::new(),
+        using: None,
+        language,
+        determinism_specifier,
+        options: None,
+        remote_connection: None,
+    }))
 }
 
 fn parse_create_branch(p: &mut Parser, or_replace: bool) -> Result<Statement, ParserError> {
@@ -621,10 +1007,17 @@ fn parse_create_branch(p: &mut Parser, or_replace: bool) -> Result<Statement, Pa
 
 fn parse_drop(p: &mut Parser) -> Result<Statement, ParserError> {
     p.expect_keyword(Keyword::DROP)?;
-    let is_catalog = if opt_kw(p, Keyword::CATALOG) {
-        true
+    enum DropKind {
+        Catalog,
+        Branch,
+        Role,
+    }
+    let kind = if opt_kw(p, Keyword::CATALOG) {
+        DropKind::Catalog
     } else if consume_word(p, "branch") {
-        false
+        DropKind::Branch
+    } else if opt_kw(p, Keyword::ROLE) {
+        DropKind::Role
     } else {
         return Err(ParserError::ParserError(
             "not a Trino-only DROP statement".into(),
@@ -633,16 +1026,25 @@ fn parse_drop(p: &mut Parser) -> Result<Statement, ParserError> {
     if opt_kw(p, Keyword::IF) {
         p.expect_keyword(Keyword::EXISTS)?;
     }
-    if is_catalog {
-        p.parse_identifier()?;
-        if !opt_kw(p, Keyword::CASCADE) {
-            opt_kw(p, Keyword::RESTRICT);
+    match kind {
+        DropKind::Catalog => {
+            p.parse_identifier()?;
+            if !opt_kw(p, Keyword::CASCADE) {
+                opt_kw(p, Keyword::RESTRICT);
+            }
         }
-    } else {
-        p.parse_identifier()?;
-        p.expect_keyword(Keyword::IN)?;
-        p.expect_keyword(Keyword::TABLE)?;
-        p.parse_object_name(true)?;
+        DropKind::Branch => {
+            p.parse_identifier()?;
+            p.expect_keyword(Keyword::IN)?;
+            p.expect_keyword(Keyword::TABLE)?;
+            p.parse_object_name(true)?;
+        }
+        DropKind::Role => {
+            p.parse_identifier()?;
+            if opt_kw(p, Keyword::IN) {
+                p.parse_identifier()?;
+            }
+        }
     }
     end_of_statement(p)?;
     Ok(placeholder())
@@ -663,9 +1065,13 @@ fn parse_alter(p: &mut Parser) -> Result<Statement, ParserError> {
     if consume_word(p, "branch") {
         return parse_alter_branch(p);
     }
-    Err(ParserError::ParserError(
-        "not a Trino-only ALTER statement".into(),
-    ))
+    p.parse_identifier()?;
+    p.parse_object_name(true)?;
+    p.expect_keyword(Keyword::SET)?;
+    p.expect_keyword(Keyword::AUTHORIZATION)?;
+    parse_principal(p)?;
+    end_of_statement(p)?;
+    Ok(placeholder())
 }
 
 fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
@@ -676,7 +1082,41 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
         false
     };
     p.parse_object_name(true)?;
-    if opt_kw(p, Keyword::SET) {
+    if opt_kw(p, Keyword::RENAME) {
+        if opt_kw(p, Keyword::COLUMN) {
+            if opt_kw(p, Keyword::IF) {
+                p.expect_keyword(Keyword::EXISTS)?;
+            }
+            p.parse_object_name(true)?;
+            p.expect_keyword(Keyword::TO)?;
+            p.parse_identifier()?;
+        } else {
+            p.expect_keyword(Keyword::TO)?;
+            p.parse_object_name(true)?;
+        }
+    } else if opt_kw(p, Keyword::ADD) {
+        p.expect_keyword(Keyword::COLUMN)?;
+        if opt_kw(p, Keyword::IF) {
+            p.expect_keyword(Keyword::NOT)?;
+            p.expect_keyword(Keyword::EXISTS)?;
+        }
+        p.parse_object_name(true)?;
+        p.parse_data_type()?;
+        parse_column_options(p)?;
+        if !(opt_kw(p, Keyword::FIRST) || consume_word(p, "last")) && opt_kw(p, Keyword::AFTER) {
+            p.parse_identifier()?;
+        }
+    } else if opt_kw(p, Keyword::DROP) {
+        p.expect_keyword(Keyword::COLUMN)?;
+        if opt_kw(p, Keyword::IF) {
+            p.expect_keyword(Keyword::EXISTS)?;
+        }
+        p.parse_object_name(true)?;
+    } else if opt_kw(p, Keyword::ALTER) {
+        p.expect_keyword(Keyword::COLUMN)?;
+        p.parse_object_name(true)?;
+        parse_alter_column_action(p)?;
+    } else if opt_kw(p, Keyword::SET) {
         if consume_word(p, "properties") {
             if if_exists {
                 return Err(ParserError::ParserError(
@@ -685,7 +1125,7 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
             }
             parse_properties(p, false)?;
         } else if opt_kw(p, Keyword::AUTHORIZATION) {
-            consume_to_end(p)?;
+            parse_principal(p)?;
         } else {
             return Err(ParserError::ParserError(
                 "unsupported ALTER TABLE ... SET form".into(),
@@ -693,11 +1133,9 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
         }
     } else if opt_kw(p, Keyword::EXECUTE) {
         p.parse_object_name(true)?;
-        if p.consume_token(&Token::LParen) {
-            consume_balanced_parens(p)?;
-        }
+        parse_optional_execute_arguments(p)?;
         if opt_kw(p, Keyword::WHERE) {
-            consume_to_end(p)?;
+            p.parse_expr()?;
         }
     } else {
         return Err(ParserError::ParserError(
@@ -706,6 +1144,64 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
     }
     end_of_statement(p)?;
     Ok(placeholder())
+}
+
+fn parse_column_options(p: &mut Parser) -> Result<(), ParserError> {
+    if consume_word(p, "default") {
+        p.parse_expr()?;
+    }
+    if opt_kw(p, Keyword::NOT) {
+        p.expect_keyword(Keyword::NULL)?;
+    }
+    if opt_kw(p, Keyword::COMMENT) {
+        parse_trino_string(p)?;
+    }
+    if opt_kw(p, Keyword::WITH) {
+        parse_properties(p, true)?;
+    }
+    Ok(())
+}
+
+fn parse_alter_column_action(p: &mut Parser) -> Result<(), ParserError> {
+    if opt_kw(p, Keyword::SET) {
+        if opt_kw(p, Keyword::DATA) {
+            p.expect_keyword(Keyword::TYPE)?;
+            p.parse_data_type()?;
+        } else if consume_word(p, "default") {
+            p.parse_expr()?;
+        } else {
+            return Err(ParserError::ParserError(
+                "unsupported ALTER COLUMN ... SET form".into(),
+            ));
+        }
+    } else if opt_kw(p, Keyword::DROP) {
+        if !consume_word(p, "default") {
+            p.expect_keyword(Keyword::NOT)?;
+            p.expect_keyword(Keyword::NULL)?;
+        }
+    } else {
+        return Err(ParserError::ParserError(
+            "unsupported ALTER COLUMN form".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_optional_execute_arguments(p: &mut Parser) -> Result<(), ParserError> {
+    if !p.consume_token(&Token::LParen) {
+        return Ok(());
+    }
+    if p.consume_token(&Token::RParen) {
+        return Ok(());
+    }
+    loop {
+        p.parse_function_args()?;
+        if !p.consume_token(&Token::Comma) {
+            break;
+        }
+    }
+    p.expect_token(&Token::RParen)?;
+    Ok(())
 }
 
 fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserError> {
@@ -728,7 +1224,7 @@ fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserErro
             }
             parse_properties(p, false)?;
         } else if opt_kw(p, Keyword::AUTHORIZATION) {
-            consume_to_end(p)?;
+            parse_principal(p)?;
         } else {
             return Err(ParserError::ParserError(
                 "unsupported ALTER MATERIALIZED VIEW ... SET form".into(),
@@ -736,8 +1232,9 @@ fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserErro
         }
     } else if opt_kw(p, Keyword::EXECUTE) {
         p.parse_object_name(true)?;
-        if p.consume_token(&Token::LParen) {
-            consume_balanced_parens(p)?;
+        parse_optional_execute_arguments(p)?;
+        if opt_kw(p, Keyword::WHERE) {
+            p.parse_expr()?;
         }
     } else {
         return Err(ParserError::ParserError(
@@ -757,7 +1254,7 @@ fn parse_alter_view(p: &mut Parser) -> Result<Statement, ParserError> {
         // ALTER VIEW name REFRESH — nothing else to consume
     } else if opt_kw(p, Keyword::SET) {
         if opt_kw(p, Keyword::AUTHORIZATION) {
-            consume_to_end(p)?;
+            parse_principal(p)?;
         } else {
             return Err(ParserError::ParserError(
                 "unsupported ALTER VIEW ... SET form".into(),
@@ -792,7 +1289,16 @@ fn parse_alter_branch(p: &mut Parser) -> Result<Statement, ParserError> {
                 "ALTER BRANCH SET RETENTION is missing its retention period".into(),
             ));
         }
-        consume_to_end(p)?;
+        match p.next_token().token {
+            Token::Number(_, _) => {}
+            other => {
+                return Err(ParserError::ParserError(format!(
+                    "ALTER BRANCH retention requires an integer, found {other}"
+                )))
+            }
+        }
+        consume_word(p, "day");
+        consume_word(p, "days");
     } else {
         return Err(ParserError::ParserError(
             "unsupported ALTER BRANCH form".into(),
@@ -802,60 +1308,164 @@ fn parse_alter_branch(p: &mut Parser) -> Result<Statement, ParserError> {
     Ok(placeholder())
 }
 
-fn parse_grant_roles(p: &mut Parser) -> Result<Statement, ParserError> {
+fn has_top_level_word_before(p: &Parser, expected: &str, boundary: &str) -> bool {
+    let mut depth = 0usize;
+    for index in 0.. {
+        match p.peek_nth_token(index).token {
+            Token::EOF | Token::SemiColon => return false,
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::Word(ref word) if depth == 0 => {
+                if word.value.eq_ignore_ascii_case(expected) {
+                    return true;
+                }
+                if word.value.eq_ignore_ascii_case(boundary) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn parse_identifier_list(p: &mut Parser) -> Result<(), ParserError> {
+    loop {
+        p.parse_identifier()?;
+        if !p.consume_token(&Token::Comma) {
+            return Ok(());
+        }
+    }
+}
+
+fn parse_principal_list(p: &mut Parser) -> Result<(), ParserError> {
+    loop {
+        parse_principal(p)?;
+        if !p.consume_token(&Token::Comma) {
+            return Ok(());
+        }
+    }
+}
+
+fn parse_privilege_list(p: &mut Parser) -> Result<(), ParserError> {
+    if opt_kw(p, Keyword::ALL) {
+        p.expect_keyword(Keyword::PRIVILEGES)?;
+        return Ok(());
+    }
+    loop {
+        let compound = is_unquoted_word_at(p, 0, "create") || is_unquoted_word_at(p, 0, "drop");
+        p.parse_identifier()?;
+        if compound {
+            let _ = consume_word(p, "branch")
+                || consume_word(p, "role")
+                || consume_word(p, "table")
+                || consume_word(p, "schema");
+        } else if p.peek_keyword(Keyword::ROLE) {
+            p.next_token();
+        }
+        if !p.consume_token(&Token::Comma) {
+            return Ok(());
+        }
+    }
+}
+
+fn parse_grant_object(p: &mut Parser) -> Result<(), ParserError> {
+    if consume_word(p, "branch") {
+        p.parse_identifier()?;
+        p.expect_keyword(Keyword::IN)?;
+    }
+    let known_kind = if opt_kw(p, Keyword::MATERIALIZED) {
+        p.expect_keyword(Keyword::VIEW)?;
+        true
+    } else {
+        opt_kw(p, Keyword::TABLE)
+            || opt_kw(p, Keyword::SCHEMA)
+            || consume_word(p, "function")
+            || consume_word(p, "procedure")
+    };
+    if !known_kind
+        && matches!(p.peek_token_ref().token, Token::Word(_))
+        && matches!(p.peek_nth_token(1).token, Token::Word(_))
+        && !is_unquoted_word_at(p, 1, "to")
+        && !is_unquoted_word_at(p, 1, "from")
+    {
+        p.next_token();
+    }
+    p.parse_object_name(true)?;
+    Ok(())
+}
+
+fn parse_optional_grantor_and_catalog(p: &mut Parser) -> Result<(), ParserError> {
+    if opt_kw(p, Keyword::GRANTED) {
+        p.expect_keyword(Keyword::BY)?;
+        parse_grantor(p)?;
+    }
+    if opt_kw(p, Keyword::IN) {
+        p.parse_identifier()?;
+    }
+    Ok(())
+}
+
+fn parse_grant(p: &mut Parser) -> Result<Statement, ParserError> {
     p.expect_keyword(Keyword::GRANT)?;
-    loop {
-        p.parse_object_name(true)?;
-        if !p.consume_token(&Token::Comma) {
-            break;
+    if has_top_level_word_before(p, "on", "to") {
+        parse_privilege_list(p)?;
+        p.expect_keyword(Keyword::ON)?;
+        parse_grant_object(p)?;
+        p.expect_keyword(Keyword::TO)?;
+        parse_principal(p)?;
+        if opt_kw(p, Keyword::WITH) {
+            p.expect_keyword(Keyword::GRANT)?;
+            p.expect_keyword(Keyword::OPTION)?;
         }
-    }
-    p.expect_keyword(Keyword::TO)?;
-    loop {
-        opt_kw(p, Keyword::USER);
-        opt_kw(p, Keyword::ROLE);
-        p.parse_object_name(true)?;
-        if !p.consume_token(&Token::Comma) {
-            break;
+    } else {
+        parse_identifier_list(p)?;
+        p.expect_keyword(Keyword::TO)?;
+        parse_principal_list(p)?;
+        if opt_kw(p, Keyword::WITH) {
+            p.expect_keyword(Keyword::ADMIN)?;
+            p.expect_keyword(Keyword::OPTION)?;
         }
-    }
-    if opt_kw(p, Keyword::WITH) {
-        p.expect_keyword(Keyword::ADMIN)?;
-        p.expect_keyword(Keyword::OPTION)?;
+        parse_optional_grantor_and_catalog(p)?;
     }
     end_of_statement(p)?;
     Ok(placeholder())
 }
 
-fn parse_revoke_roles(p: &mut Parser) -> Result<Statement, ParserError> {
+fn parse_revoke(p: &mut Parser) -> Result<Statement, ParserError> {
     p.expect_keyword(Keyword::REVOKE)?;
-    // `ADMIN` is only the admin-option marker when followed by `OPTION`;
-    // otherwise it is a role name (e.g. `REVOKE admin FROM ...`).
-    if p.peek_keyword(Keyword::ADMIN)
-        && matches!(
-            p.peek_nth_token(1).token,
-            Token::Word(ref w) if w.keyword == Keyword::OPTION
-        )
-    {
-        p.next_token();
-        p.expect_keyword(Keyword::OPTION)?;
-        opt_kw(p, Keyword::FOR);
-    }
-    loop {
-        p.parse_object_name(true)?;
-        if !p.consume_token(&Token::Comma) {
-            break;
+    if has_top_level_word_before(p, "on", "from") {
+        if opt_kw(p, Keyword::GRANT) {
+            p.expect_keyword(Keyword::OPTION)?;
+            p.expect_keyword(Keyword::FOR)?;
         }
-    }
-    p.expect_keyword(Keyword::FROM)?;
-    loop {
-        opt_kw(p, Keyword::USER);
-        opt_kw(p, Keyword::ROLE);
-        p.parse_object_name(true)?;
-        if !p.consume_token(&Token::Comma) {
-            break;
+        parse_privilege_list(p)?;
+        p.expect_keyword(Keyword::ON)?;
+        parse_grant_object(p)?;
+        p.expect_keyword(Keyword::FROM)?;
+        parse_principal(p)?;
+    } else {
+        if p.peek_keyword(Keyword::ADMIN) && is_unquoted_word_at(p, 1, "option") {
+            p.next_token();
+            p.expect_keyword(Keyword::OPTION)?;
+            p.expect_keyword(Keyword::FOR)?;
         }
+        parse_identifier_list(p)?;
+        p.expect_keyword(Keyword::FROM)?;
+        parse_principal_list(p)?;
+        parse_optional_grantor_and_catalog(p)?;
     }
+    end_of_statement(p)?;
+    Ok(placeholder())
+}
+
+fn parse_deny(p: &mut Parser) -> Result<Statement, ParserError> {
+    p.expect_keyword(Keyword::DENY)?;
+    parse_privilege_list(p)?;
+    p.expect_keyword(Keyword::ON)?;
+    parse_grant_object(p)?;
+    p.expect_keyword(Keyword::TO)?;
+    parse_principal(p)?;
     end_of_statement(p)?;
     Ok(placeholder())
 }
@@ -903,6 +1513,15 @@ mod tests {
             "ALTER TABLE t SET AUTHORIZATION USER user1",
             "ALTER TABLE t EXECUTE optimize",
             "ALTER TABLE t EXECUTE optimize (file_size_threshold = '16MB')",
+            "ALTER TABLE IF EXISTS t RENAME TO t2",
+            "ALTER TABLE t RENAME COLUMN IF EXISTS payload.old_name TO new_name",
+            "ALTER TABLE t ADD COLUMN IF NOT EXISTS payload.item bigint LAST",
+            "ALTER TABLE t ADD COLUMN payload.item varchar COMMENT 'item' WITH (x = 1) AFTER sibling",
+            "ALTER TABLE t DROP COLUMN IF EXISTS payload.item",
+            "ALTER TABLE t ALTER COLUMN payload.item SET DATA TYPE varchar",
+            "ALTER TABLE t ALTER COLUMN payload.item SET DEFAULT 1",
+            "ALTER TABLE t ALTER COLUMN payload.item DROP DEFAULT",
+            "ALTER TABLE t ALTER COLUMN payload.item DROP NOT NULL",
             "ALTER VIEW v RENAME TO v2",
             "ALTER VIEW v REFRESH",
             "ALTER VIEW v SET AUTHORIZATION ROLE r",
@@ -913,8 +1532,24 @@ mod tests {
             "REVOKE admin FROM user1",
             "GRANT role1 TO USER u, ROLE r WITH ADMIN OPTION",
             "REVOKE ADMIN OPTION FOR role1 FROM USER u",
+            "CREATE ROLE role1",
+            "CREATE ROLE role1 WITH ADMIN CURRENT_USER IN hive",
+            "CREATE ROLE role1 WITH ADMIN ROLE admin IN hive",
+            "DROP ROLE IF EXISTS role1 IN hive",
+            "SET ROLE ALL IN hive",
+            "SET ROLE NONE",
+            "SET ROLE role1 IN hive",
+            "GRANT role1, role2 TO USER u, ROLE r WITH ADMIN OPTION GRANTED BY CURRENT_ROLE IN hive",
+            "REVOKE ADMIN OPTION FOR role1 FROM USER u GRANTED BY ROLE admin IN hive",
+            "GRANT SELECT, INSERT ON TABLE hive.default.orders TO ROLE analyst WITH GRANT OPTION",
+            "GRANT ALL PRIVILEGES ON BRANCH dev IN TABLE hive.default.orders TO USER alice",
+            "REVOKE GRANT OPTION FOR SELECT ON SCHEMA hive.default FROM ROLE analyst",
+            "DENY DELETE ON hive.default.orders TO USER alice",
             "CREATE FUNCTION testing.default.add_two(x bigint) RETURNS bigint COMMENT 'x' LANGUAGE SQL DETERMINISTIC RETURNS NULL ON NULL INPUT RETURN x + 2",
             "CREATE OR REPLACE FUNCTION f() RETURNS bigint RETURN 1",
+            "CREATE FUNCTION external_f(x bigint) RETURNS bigint LANGUAGE python AS $$return x$$",
+            "CREATE FUNCTION compound_f(n bigint) RETURNS bigint BEGIN DECLARE a bigint DEFAULT 1; SET a = a + n; RETURN a; END",
+            "CREATE FUNCTION loop_f(n bigint) RETURNS bigint BEGIN WHILE n > 0 DO SET n = n - 1; END WHILE; RETURN n; END",
         ] {
             assert!(parses(sql), "expected to parse: {sql}");
         }
@@ -936,6 +1571,10 @@ mod tests {
             "CREATE OR REPLACE BRANCH IF NOT EXISTS b IN TABLE t",
             "CREATE FUNCTION f()",
             "CREATE FUNCTION f() RETURNS bigint COMMENT 'x'",
+            "CREATE FUNCTION f() RETURNS bigint LANGUAGE SQL LANGUAGE SQL RETURN 1",
+            "CREATE FUNCTION f() RETURNS bigint AS $tag$return 1$tag$",
+            "CREATE FUNCTION f() RETURNS bigint BEGIN RETURN 1 END",
+            "CREATE FUNCTION f() RETURNS bigint BEGIN IF true RETURN 1; END IF; END",
             "ALTER TABLE t SET PROPERTIES",
             "ALTER TABLE t SET PROPERTIES ()",
             "ALTER TABLE t SET PROPERTIES (x = )",
@@ -947,11 +1586,32 @@ mod tests {
             "ALTER VIEW t SET PROPERTIES x = 1",
             "ALTER BRANCH b SET",
             "ALTER TABLE t EXECUTE",
+            "ALTER TABLE t RENAME COLUMN payload.item new_name",
+            "ALTER TABLE t ADD COLUMN IF EXISTS payload.item bigint",
+            "ALTER TABLE t ADD COLUMN payload.item bigint AFTER",
+            "ALTER TABLE t DROP COLUMN IF NOT payload.item",
+            "ALTER TABLE t ALTER COLUMN payload.item SET",
+            "ALTER TABLE t ALTER COLUMN payload.item DROP NULL",
+            "ALTER TABLE t SET AUTHORIZATION USER ROLE alice",
+            "ALTER VIEW v SET AUTHORIZATION ROLE r trailing",
+            "ALTER MATERIALIZED VIEW mv EXECUTE refresh (x = 1",
             "SET PATH one.too.many, qualifiers",
             "SET SESSION AUTHORIZATION null",
             "EXPLAIN VERBOSE SELECT * FROM t",
             "SHOW SESSION LIKE '%$_%' ESCAPE",
             "SHOW COLUMNS orders",
+            "CREATE ROLE role1 WITH ADMIN",
+            "CREATE ROLE role1 IN",
+            "DROP ROLE role1 IN",
+            "SET ROLE",
+            "SET ROLE ALL trailing",
+            "GRANT role1 TO USER u WITH GRANT OPTION",
+            "GRANT SELECT ON TABLE t ROLE analyst",
+            "GRANT ALL ON TABLE t TO ROLE analyst",
+            "REVOKE ADMIN FOR role1 FROM USER u",
+            "REVOKE SELECT ON TABLE t TO ROLE analyst",
+            "DENY SELECT TABLE t TO ROLE analyst",
+            "DENY SELECT ON TABLE t TO ROLE analyst trailing",
         ] {
             assert!(!parses(sql), "expected to reject: {sql}");
         }

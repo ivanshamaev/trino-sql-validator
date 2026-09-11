@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 from trino_sql_validator import Error, ValidationResult, validate, validate_file
@@ -46,6 +47,101 @@ def test_invalid_does_not_raise() -> None:
     # bad syntax must be returned as a value, never raised
     result = validate("THIS IS NOT SQL AT ALL ((")
     assert result.valid is False
+
+
+def test_parser_rejects_excessive_nesting_without_unwinding() -> None:
+    sql = "SELECT " + "(" * 300 + "1" + ")" * 300
+
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.error is not None
+    assert "maximum nesting depth" in result.error.message
+
+
+def test_utf8_bom_and_crlf_are_accepted_with_logical_warning_locations() -> None:
+    result = validate("\ufeffSELECT 1\r\nUNION ALL\r\nSELECT marh(2)")
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh"]
+    assert (result.warnings[0].line, result.warnings[0].column) == (3, 8)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CASE WHEN " + " * ".join(str(value) for value in range(1, 91)),
+        "SELECT id FROM t WHERE\n" + "(f()\nOR " * 22 + "GROUP BY id",
+    ],
+    ids=["case-chain", "nested-or-chain"],
+)
+def test_upstream_backtracking_regressions_finish_quickly(sql: str) -> None:
+    started = perf_counter()
+
+    result = validate(sql)
+
+    assert result.valid is False
+    assert perf_counter() - started < 2.0
+
+
+def test_invalid_errors_are_deterministic() -> None:
+    sql = "CREATE VIEW report SECURITY OWNER AS SELECT 1 trailing"
+
+    first = validate(sql)
+    second = validate(sql)
+
+    assert first == second
+    assert first.valid is False
+
+
+def test_comments_escaped_quotes_and_jinja_preserve_transform_positions() -> None:
+    sql = (
+        "SELECT\r\n"
+        "  (marh('{{ literal }}''s value')).trim() /* adjacent */ "
+        "BETWEEN SYMMETRIC {{ lower_bound }} AND 10"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == ["marh"]
+    assert (result.warnings[0].line, result.warnings[0].column) == (2, 4)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "PREPARE p FROM\nSELECT marh(1)",
+        "SELECT CAST(1 AS ARRAY (BIGINT)),\nmarh(1)",
+        "SELECT IPADDRESS '10.0.0.1',\nmarh(1)",
+        "SELECT * FROM customer FOR VERSION AS OF 'audit'\nWHERE marh(id)",
+        "SELECT * FROM (VALUES 'one', 'two') AS t(v)\nWHERE marh(v)",
+        "SELECT 1 AS x UNION CORRESPONDING BY (x)\nSELECT marh(2) AS x",
+        "SELECT * FROM t PIVOT (sum(v) FOR k IN (1)\nGROUP BY marh(g))",
+        "SELECT * FROM a CROSS JOIN NEAREST (FROM b\nMATCH marh(b.ts) <= a.ts)",
+        "SELECT ROW(1,\nmarh(2)).* AS (x, y)",
+        "SELECT a FROM t\nGROUP BY ALL marh(a)",
+        "SELECT\nmarh(ts) AT LOCAL",
+        "UPDATE t @ dev\nSET x = marh(1)",
+        "SELECT\nmarh(1) BETWEEN SYMMETRIC 0 AND 2",
+        "SELECT\n('a').marh()",
+        "SELECT\ntrim(BOTH FROM marh(' x '))",
+        "SELECT U&'abc#0041' UESCAPE '#',\nmarh(1)",
+        "SELECT transform(ARRAY[1], () -> 42),\nmarh(1)",
+        "SELECT bigint::parse(value => '42'),\nmarh(1)",
+    ],
+)
+def test_multiline_token_transform_location_matrix(sql: str) -> None:
+    result = validate(sql)
+    prefix = sql[: sql.index("marh")]
+
+    assert result.valid is True, result.error
+    warning = next(warning for warning in result.warnings if warning.name == "marh")
+    assert (warning.line, warning.column) == (
+        prefix.count("\n") + 1,
+        len(prefix.rsplit("\n", maxsplit=1)[-1]) + 1,
+    )
 
 
 def test_empty_string_is_valid_zero_statements() -> None:
@@ -246,6 +342,67 @@ def test_type_checking_skipped_for_non_trino_dialect() -> None:
     assert result.warnings == ()
 
 
+@pytest.mark.parametrize(
+    "data_type",
+    [
+        "TIMESTAMP(p)",
+        "TIMESTAMP(p) WITHOUT TIME ZONE",
+        "TIMESTAMP(p) WITH TIME ZONE",
+        "TIME(p)",
+        "TIME(p) WITHOUT TIME ZONE",
+        "TIME(p) WITH TIME ZONE",
+        "INTERVAL YEAR(1) TO MONTH",
+        "INTERVAL DAY(1) TO SECOND(2)",
+        "INTERVAL HOUR(1) TO MINUTE",
+        "INTERVAL MINUTE(1) TO SECOND(2)",
+        "INTERVAL SECOND(1, 2)",
+        "MAP<BIGINT, VARCHAR>",
+        "MAP<BIGINT, VARCHAR> ARRAY",
+        "VARCHAR(7) ARRAY ARRAY",
+        "ROW(x BIGINT, z ROW(m ARRAY<BIGINT>, n MAP<DOUBLE, VARCHAR>))",
+    ],
+)
+def test_trino_structural_type_extensions_validate(data_type: str) -> None:
+    result = validate(f"SELECT CAST(NULL AS {data_type})")
+
+    assert result.valid is True, result.error
+    assert result.warnings == ()
+
+
+def test_trino_structural_type_extensions_preserve_nested_warning_positions() -> None:
+    sql = "SELECT CAST(NULL AS MAP<BIGINT, bignum> ARRAY ARRAY)"
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum"]
+    assert [(warning.line, warning.column) for warning in result.warnings] == [
+        (1, sql.index("bignum") + 1)
+    ]
+
+
+@pytest.mark.parametrize(
+    "data_type",
+    [
+        "TIMESTAMP()",
+        "TIMESTAMP(p, q)",
+        "INTERVAL YEAR() TO MONTH",
+        "INTERVAL YEAR(1, 2) TO MONTH",
+        "INTERVAL DAY(x) TO SECOND",
+        "INTERVAL SECOND(1, 2, 3)",
+        "INTERVAL DAY(1) TO SECOND()",
+        "MAP<BIGINT>",
+        "MAP<BIGINT, VARCHAR",
+        "BIGINT ARRAY[x]",
+    ],
+)
+def test_trino_structural_type_malformed_neighbors_are_rejected(data_type: str) -> None:
+    result = validate(f"SELECT CAST(NULL AS {data_type})")
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
 def test_invalid_sql_has_no_warnings() -> None:
     result = validate("SELECT marh(1 FORM")
     assert result.valid is False
@@ -322,6 +479,121 @@ def test_create_function_checks_return_type_and_body() -> None:
     assert result.unknown_functions == ["marh"]
 
 
+def test_create_function_structurally_parses_characteristics_and_parameters() -> None:
+    sql = (
+        "CREATE FUNCTION f(value bignum)\n"
+        "RETURNS woop\n"
+        "LANGUAGE SQL\n"
+        "NOT DETERMINISTIC\n"
+        "RETURNS NULL ON NULL INPUT\n"
+        "SECURITY DEFINER\n"
+        "COMMENT 'parser coverage'\n"
+        "WITH (optimization = true)\n"
+        "RETURN marh(value)"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum", "woop"]
+    assert result.unknown_functions == ["marh"]
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("bignum", 1, 25),
+        ("woop", 2, 9),
+        ("marh", 9, 8),
+    ]
+
+
+def test_create_function_treats_dollar_body_as_opaque_language_text() -> None:
+    sql = (
+        "CREATE FUNCTION external_f(value bignum) RETURNS woop\n"
+        "LANGUAGE python\n"
+        "AS $$return marh(value) and the word RETURN are opaque$$"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum", "woop"]
+    assert result.unknown_functions == []
+
+
+def test_create_function_parses_compound_control_body_and_warnings() -> None:
+    sql = (
+        "CREATE FUNCTION routine_f(n bignum)\n"
+        "RETURNS woop\n"
+        "BEGIN\n"
+        "  DECLARE a innerbad DEFAULT marh(1);\n"
+        "  IF marh(n) > 2 THEN\n"
+        "    SET a = marh(n);\n"
+        "  ELSEIF n = 2 THEN\n"
+        "    SET a = 2;\n"
+        "  ELSE\n"
+        "    SET a = 1;\n"
+        "  END IF;\n"
+        "  WHILE n > 0 DO\n"
+        "    SET n = n - 1;\n"
+        "  END WHILE;\n"
+        "  RETURN marh(a);\n"
+        "END"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum", "woop", "innerbad"]
+    assert result.unknown_functions == ["marh", "marh", "marh", "marh"]
+    assert [(warning.name, warning.line) for warning in result.warnings] == [
+        ("bignum", 1),
+        ("woop", 2),
+        ("innerbad", 4),
+        ("marh", 4),
+        ("marh", 5),
+        ("marh", 6),
+        ("marh", 15),
+    ]
+
+
+def test_create_function_supports_all_compound_control_shapes() -> None:
+    sql = (
+        "CREATE FUNCTION control_f(n bigint) RETURNS bigint BEGIN\n"
+        "  DECLARE result bigint DEFAULT 0;\n"
+        "  CASE n WHEN 0 THEN SET result = 1; ELSE SET result = 2; END CASE;\n"
+        "  CASE WHEN n > 0 THEN SET result = 3; END CASE;\n"
+        "  outer_loop: LOOP ITERATE outer_loop; END LOOP;\n"
+        "  counting: WHILE n > 0 DO SET n = n - 1; END WHILE;\n"
+        "  retry: REPEAT SET n = n + 1; UNTIL n > 0 END REPEAT;\n"
+        "  LEAVE outer_loop;\n"
+        "  RETURN result;\n"
+        "END"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE FUNCTION f() RETURNS bigint LANGUAGE SQL LANGUAGE SQL RETURN 1",
+        "CREATE FUNCTION f() RETURNS bigint DETERMINISTIC NOT DETERMINISTIC RETURN 1",
+        "CREATE FUNCTION f() RETURNS bigint SECURITY OWNER RETURN 1",
+        "CREATE FUNCTION f() RETURNS bigint RETURNS NULL INPUT RETURN 1",
+        "CREATE FUNCTION f() RETURNS bigint AS 'return 1'",
+        "CREATE FUNCTION f() RETURNS bigint AS $tag$return 1$tag$",
+        "CREATE FUNCTION f() RETURNS bigint BEGIN RETURN 1 END",
+        "CREATE FUNCTION f() RETURNS bigint BEGIN IF true RETURN 1; END IF; END",
+        "CREATE FUNCTION f() RETURNS bigint BEGIN DECLARE x bigint RETURN x; END",
+        "CREATE FUNCTION f() RETURNS bigint BEGIN LOOP END LOOP; END",
+    ],
+)
+def test_create_function_rejects_malformed_routine_shapes(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
 def test_inline_with_function_checks_body_and_hides_local_function_names() -> None:
     sql = (
         "WITH\n"
@@ -357,6 +629,42 @@ def test_inline_with_function_allows_a_following_cte_query() -> None:
     assert result.warnings == ()
 
 
+def test_inline_with_function_supports_opaque_dollar_body() -> None:
+    sql = (
+        "WITH FUNCTION external_f(value bignum) RETURNS woop "
+        "LANGUAGE python AS $$return marh(value)$$\n"
+        "SELECT external_f(1)"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum", "woop"]
+    assert result.unknown_functions == []
+
+
+def test_inline_with_function_supports_compound_sql_body() -> None:
+    sql = (
+        "WITH FUNCTION local_f(value bignum) RETURNS woop\n"
+        "BEGIN\n"
+        "  DECLARE result innerbad DEFAULT marh(value);\n"
+        "  RETURN marh(result);\n"
+        "END\n"
+        "SELECT local_f(1)"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum", "woop", "innerbad"]
+    assert result.unknown_functions == ["marh", "marh"]
+    assert [(warning.name, warning.line) for warning in result.warnings] == [
+        ("bignum", 1),
+        ("woop", 1),
+        ("innerbad", 3),
+        ("marh", 3),
+        ("marh", 4),
+    ]
+
+
 @pytest.mark.parametrize(
     "sql",
     [
@@ -364,6 +672,8 @@ def test_inline_with_function_allows_a_following_cte_query() -> None:
         "WITH FUNCTION answer() RETURNS BIGINT RETURN SELECT 1",
         "WITH FUNCTION answer() RETURNS BIGINT RETURN 1, SELECT 1",
         "WITH FUNCTION answer() RETURNS BIGINT RETURN 1",
+        "WITH FUNCTION answer() RETURNS BIGINT AS $tag$return 1$tag$ SELECT 1",
+        "WITH FUNCTION answer() RETURNS BIGINT BEGIN RETURN 1 END SELECT 1",
     ],
 )
 def test_inline_with_function_rejects_malformed_declarations(sql: str) -> None:
@@ -510,15 +820,170 @@ def test_scalar_values_relation_preserves_nested_warning_positions() -> None:
     ]
 
 
+def test_scalar_values_are_accepted_as_an_insert_query() -> None:
+    result = validate("INSERT INTO target @ dev VALUES marh(1), CAST(2 AS bignum)")
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+    assert result.unknown_functions == ["marh"]
+    assert result.unknown_types == ["bignum"]
+
+
 @pytest.mark.parametrize(
     "sql",
     [
         "SELECT * FROM LATERAL (VALUES )",
         "SELECT * FROM LATERAL (VALUES 1,)",
-        "INSERT INTO target VALUES 1",
     ],
 )
 def test_scalar_values_relation_rejects_malformed_or_dml_shapes(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) AS ord))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) ord(a, b, c)))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(SELECT * FROM orders) AS ord))",
+        (
+            "SELECT * FROM TABLE(some_ptf("
+            "input => TABLE(orders) AS ord(a, b, c) "
+            "PARTITION BY (a, b) PRUNE WHEN EMPTY "
+            "ORDER BY (b ASC NULLS LAST)))"
+        ),
+        (
+            "SELECT * FROM TABLE(some_ptf("
+            "input1 => TABLE(customers) PARTITION BY nationkey, "
+            "input3 => TABLE(lineitem), "
+            "input2 => TABLE(nation) PARTITION BY nationkey "
+            "COPARTITION (customers, nation)))"
+        ),
+    ],
+)
+def test_table_function_table_argument_aliases_and_organization_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+
+
+def test_table_function_organization_preserves_nested_warning_positions() -> None:
+    sql = (
+        "SELECT *\n"
+        "FROM TABLE(some_ptf(\n"
+        "  input => TABLE(orders) AS ord\n"
+        "    PARTITION BY CAST(marh(a) AS bignum)\n"
+        "    KEEP WHEN EMPTY\n"
+        "    ORDER BY marh(b) DESC NULLS LAST\n"
+        "))"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_types == ["bignum"]
+    assert result.unknown_functions == ["some_ptf", "marh", "marh"]
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("some_ptf", 2, 12),
+        ("marh", 4, 23),
+        ("bignum", 4, 34),
+        ("marh", 6, 14),
+    ]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) AS))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) AS ord()))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) PARTITION a))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) PARTITION BY))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) PRUNE EMPTY))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) ORDER b))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) ORDER BY ()))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) AS ord bogus))",
+        "SELECT * FROM TABLE(some_ptf(input => TABLE(orders) COPARTITION(a, b)))",
+        (
+            "SELECT * FROM TABLE(some_ptf("
+            "input => TABLE(orders) PARTITION BY a COPARTITION(a)))"
+        ),
+        (
+            "SELECT * FROM TABLE(some_ptf("
+            "input => TABLE(orders) PARTITION BY a COPARTITION(a,)))"
+        ),
+    ],
+)
+def test_table_function_table_argument_malformed_neighbors_are_rejected(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 BETWEEN ASYMMETRIC 2 AND 3",
+        "SELECT 1 BETWEEN SYMMETRIC 2 AND 3",
+        "SELECT 1 NOT BETWEEN SYMMETRIC 2 AND 3",
+        "SELECT trim(BOTH FROM ' abc ')",
+        "SELECT trim(LEADING FROM ' abc ')",
+        "SELECT trim(TRAILING FROM ' abc ')",
+        "SELECT U&'' UESCAPE ')'",
+        "SELECT U&'abc#0041' UESCAPE '#'",
+        "SELECT transform(ARRAY[1], () -> 42)",
+        "SELECT ('a').trim()",
+        "SELECT bigint::parse(value => '42')",
+        "SELECT RUNNING LAST(x, 1)",
+        "SELECT FINAL FIRST(x, 1)",
+        "SELECT col1 = ALL (VALUES ROW(1), ROW(2))",
+        "SELECT 1_000_000 + 0xCA_FE",
+    ],
+)
+def test_trino_expression_extensions_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+
+
+@pytest.mark.parametrize(
+    ("sql", "name"),
+    [
+        ("SELECT ('a').marh()", "marh"),
+        ("SELECT bigint::marh(value => 42)", "marh"),
+        ("SELECT RUNNING marh(x, 1)", "marh"),
+    ],
+)
+def test_trino_expression_extensions_preserve_function_warning_positions(
+    sql: str, name: str
+) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.unknown_functions == [name]
+    assert [(warning.line, warning.column) for warning in result.warnings] == [
+        (1, sql.index(name) + 1)
+    ]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 BETWEEN SYMMETRIC AND 3",
+        "SELECT trim(BOTH FROM)",
+        "SELECT transform(ARRAY[1], () ->)",
+        "SELECT U&'hello\\8Bd5' UESCAPE '%%'",
+        "SELECT U&'hello\\8Bd5' UESCAPE ''",
+        "SELECT U&'hello\\8Bd5' UESCAPE '1'",
+        "SELECT U&'hello\\6dB\\8Bd5'",
+        "SELECT bigint::(value => 42)",
+    ],
+)
+def test_trino_expression_extension_malformed_neighbors_are_rejected(sql: str) -> None:
     result = validate(sql)
 
     assert result.valid is False
@@ -621,6 +1086,27 @@ def test_pivot_group_by_validates(sql: str) -> None:
         assert result.warnings[0].column == sql.index("marh") + 1
 
 
+def test_pivot_group_by_preserves_grouping_warning_positions() -> None:
+    from trino_sql_validator import FunctionWarning, TypeWarning
+
+    sql = (
+        "SELECT *\n"
+        "FROM sales PIVOT (\n"
+        "  sum(amount) FOR month IN (1 AS jan)\n"
+        "  GROUP BY CAST(marh(region) AS bignum)\n"
+        ")"
+    )
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 4, 17),
+        ("bignum", 4, 33),
+    ]
+    assert isinstance(result.warnings[0], FunctionWarning)
+    assert isinstance(result.warnings[1], TypeWarning)
+
+
 @pytest.mark.parametrize(
     "sql",
     [
@@ -667,6 +1153,21 @@ def test_nearest_relations_preserve_warning_positions() -> None:
     assert [warning.column for warning in result.warnings] == [
         offset + 1 for offset in (sql.index("marh"), sql.rindex("marh"))
     ]
+
+
+def test_with_session_preserves_property_value_warning_positions() -> None:
+    from trino_sql_validator import FunctionWarning, TypeWarning
+
+    sql = "WITH SESSION\n  example.setting = marh(CAST(1 AS bignum))\nSELECT 1"
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 2, 21),
+        ("bignum", 2, 36),
+    ]
+    assert isinstance(result.warnings[0], FunctionWarning)
+    assert isinstance(result.warnings[1], TypeWarning)
 
 
 @pytest.mark.parametrize(
@@ -814,6 +1315,7 @@ def test_trino_rejects_malformed_non_decimal_integer_literals(sql: str) -> None:
         "ALTER MATERIALIZED VIEW daily_orders SET PROPERTIES refresh_interval = '1h'",
         "SET PATH analytics, hive.default",
         "SET SESSION AUTHORIZATION 'analyst'",
+        'SET SESSION AUTHORIZATION "null"',
         "EXPLAIN ANALYZE VERBOSE SELECT * FROM orders",
         "SHOW CATALOGS LIKE '%$_%' ESCAPE '$'",
         "SHOW SCHEMAS IN hive LIKE '%$_%' ESCAPE '$'",
@@ -821,6 +1323,17 @@ def test_trino_rejects_malformed_non_decimal_integer_literals(sql: str) -> None:
         "SHOW COLUMNS FROM hive.default.orders LIKE '%$_%' ESCAPE '$'",
         "SHOW FUNCTIONS FROM hive.default LIKE '%$_%' ESCAPE '$'",
         "SHOW SESSION LIKE '%$_%' ESCAPE '$'",
+        "CREATE ROLE role1 WITH ADMIN CURRENT_USER IN hive",
+        "DROP ROLE IF EXISTS role1 IN hive",
+        "SET ROLE role1 IN hive",
+        "GRANT role1 TO USER alice WITH ADMIN OPTION GRANTED BY CURRENT_ROLE IN hive",
+        "GRANT SELECT ON TABLE hive.default.orders TO ROLE analyst WITH GRANT OPTION",
+        "REVOKE GRANT OPTION FOR SELECT ON TABLE hive.default.orders FROM ROLE analyst",
+        "DENY DELETE ON hive.default.orders TO USER alice",
+        "ALTER TABLE orders RENAME COLUMN IF EXISTS payload.old_name TO new_name",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payload.item BIGINT LAST",
+        "ALTER TABLE orders DROP COLUMN IF EXISTS payload.item",
+        "ALTER TABLE orders ALTER COLUMN payload.item SET DATA TYPE VARCHAR",
     ],
 )
 def test_current_trino_statement_forms_validate(sql: str) -> None:
@@ -828,6 +1341,113 @@ def test_current_trino_statement_forms_validate(sql: str) -> None:
 
     assert result.valid is True, result.error
     assert result.statement_count == 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE IF NOT EXISTS bar (c VARCHAR WITH (nullable = true, compression = 'LZ4'))",
+        "CREATE TABLE bar (LIKE source INCLUDING PROPERTIES)",
+        "CREATE TABLE bar (c VARCHAR, LIKE source EXCLUDING PROPERTIES) COMMENT 'copy'",
+        "CREATE TABLE foo(x, y) AS SELECT a, b FROM source",
+        "CREATE OR REPLACE TABLE foo(x) AS SELECT a FROM source WITH DATA",
+        "CREATE TABLE IF NOT EXISTS foo(x) AS SELECT a FROM source WITH NO DATA",
+        "ANALYZE foo WITH (sample = 10, columns = ARRAY['a', 'b'])",
+        "CREATE VIEW report COMMENT 'report' SECURITY DEFINER AS SELECT * FROM source",
+        "CREATE VIEW report SECURITY INVOKER WITH (owner = 'analytics') AS SELECT 1",
+        "SELECT ALL, SOME, ANY FROM source",
+    ],
+)
+def test_trino_483_statement_extensions_validate(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE bar (c VARCHAR WITH ())",
+        "CREATE TABLE bar (c VARCHAR WITH (nullable))",
+        "CREATE TABLE bar (LIKE source INCLUDING)",
+        "CREATE TABLE bar (LIKE source SOMETIMES PROPERTIES)",
+        "CREATE OR REPLACE TABLE IF NOT EXISTS foo AS SELECT 1",
+        "CREATE TABLE foo(x,) AS SELECT 1",
+        "CREATE TABLE foo(x) AS SELECT 1 WITH NO DATA trailing",
+        "ANALYZE foo WITH ()",
+        "ANALYZE foo WITH (sample =)",
+        "CREATE VIEW report COMMENT 1 AS SELECT 1",
+        "CREATE VIEW report SECURITY OWNER AS SELECT 1",
+        "CREATE VIEW report SECURITY DEFINER COMMENT 'late' AS SELECT 1",
+    ],
+)
+def test_trino_483_statement_extensions_reject_malformed_neighbors(sql: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.statement_count == 0
+
+
+def test_statement_extension_metadata_preserves_warning_locations() -> None:
+    sql = (
+        "CREATE TABLE report (\n"
+        "  payload bignum WITH (computed = marh(1))\n"
+        ");\n"
+        "ANALYZE report WITH (computed = marh(2));\n"
+        "CREATE TABLE copy(x) AS SELECT marh(CAST(3 AS bignum)) WITH NO DATA"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 3
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("bignum", 2, 11),
+        ("marh", 2, 35),
+        ("marh", 4, 33),
+        ("marh", 5, 32),
+        ("bignum", 5, 47),
+    ]
+
+
+def test_custom_statement_metadata_preserves_nested_warnings() -> None:
+    sql = (
+        "ALTER TABLE report SET PROPERTIES computed = marh(1);\n"
+        "ALTER MATERIALIZED VIEW report EXECUTE refresh(value => zoop(2)) "
+        "WHERE quux(id);\n"
+        "DESCRIBE OUTPUT (SELECT marh(CAST(3 AS bignum)))"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 3
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 1, 46),
+        ("zoop", 2, 57),
+        ("quux", 2, 72),
+        ("marh", 3, 25),
+        ("bignum", 3, 40),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sql", "line", "column"),
+    [
+        ("CREATE VIEW report\nSECURITY OWNER AS SELECT 1", 2, 10),
+        ("ANALYZE report WITH (\n  sample =\n)", 2, 10),
+        ("DESCRIBE OUTPUT (\n  SELECT FROM\n)", 3, 1),
+    ],
+)
+def test_custom_statement_errors_keep_multiline_locations(
+    sql: str, line: int, column: int
+) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert (result.error.line, result.error.column) == (line, column)
 
 
 @pytest.mark.parametrize(
@@ -845,6 +1465,17 @@ def test_current_trino_statement_forms_validate(sql: str) -> None:
         "EXPLAIN VERBOSE SELECT * FROM orders",
         "SHOW SESSION LIKE '%$_%' ESCAPE",
         "SHOW COLUMNS orders",
+        "CREATE ROLE role1 WITH ADMIN",
+        "DROP ROLE role1 IN",
+        "SET ROLE ALL trailing",
+        "GRANT role1 TO USER alice WITH GRANT OPTION",
+        "GRANT ALL ON TABLE orders TO ROLE analyst",
+        "REVOKE SELECT ON TABLE orders TO ROLE analyst",
+        "DENY SELECT TABLE orders TO ROLE analyst",
+        "ALTER TABLE orders RENAME COLUMN payload.old_name new_name",
+        "ALTER TABLE orders ADD COLUMN IF EXISTS payload.item BIGINT",
+        "ALTER TABLE orders ADD COLUMN payload.item BIGINT AFTER",
+        "ALTER TABLE orders SET AUTHORIZATION USER ROLE alice",
     ],
 )
 def test_trino_statement_false_accepts_are_rejected(sql: str) -> None:

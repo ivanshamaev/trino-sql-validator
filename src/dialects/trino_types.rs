@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use sqlparser::ast::Statement;
-use sqlparser::dialect::Dialect;
+use sqlparser::dialect::{Dialect, GenericDialect};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer, Whitespace, Word};
@@ -12,6 +12,21 @@ pub(crate) struct ParsedSql {
     pub(crate) statements: Vec<Statement>,
     pub(crate) inline_functions: Vec<Statement>,
     pub(crate) compatibility_metadata: Vec<Statement>,
+    pub(crate) custom_statement_kinds: Vec<TrinoStatementKind>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrinoStatementKind {
+    Alter,
+    Catalog,
+    Branch,
+    Role,
+    Privilege,
+    Show,
+    Describe,
+    RefreshMaterializedView,
+    Session,
+    Path,
 }
 
 fn next_significant(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
@@ -30,6 +45,40 @@ fn matching_rparen(tokens: &[TokenWithSpan], open: usize) -> Option<usize> {
         match token.token {
             Token::LParen => depth += 1,
             Token::RParen => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn matching_lparen(tokens: &[TokenWithSpan], close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for index in (0..=close).rev() {
+        match tokens[index].token {
+            Token::RParen => depth += 1,
+            Token::LParen => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn matching_gt(tokens: &[TokenWithSpan], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token.token {
+            Token::Lt => depth += 1,
+            Token::Gt => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
                     return Some(index);
@@ -123,6 +172,87 @@ fn is_unquoted_word(token: &TokenWithSpan, expected: &str) -> bool {
     )
 }
 
+fn custom_statement_kind(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+) -> Option<TrinoStatementKind> {
+    let first = next_significant(tokens, start, end)?;
+    let second = next_significant(tokens, first + 1, end);
+    if ["grant", "revoke", "deny"]
+        .iter()
+        .any(|word| is_unquoted_word(&tokens[first], word))
+    {
+        return Some(TrinoStatementKind::Privilege);
+    }
+    if is_unquoted_word(&tokens[first], "alter") {
+        return Some(TrinoStatementKind::Alter);
+    }
+    if is_unquoted_word(&tokens[first], "describe")
+        && second.is_some_and(|index| {
+            is_unquoted_word(&tokens[index], "input") || is_unquoted_word(&tokens[index], "output")
+        })
+    {
+        return Some(TrinoStatementKind::Describe);
+    }
+    if is_unquoted_word(&tokens[first], "refresh")
+        && second.is_some_and(|index| is_unquoted_word(&tokens[index], "materialized"))
+    {
+        return Some(TrinoStatementKind::RefreshMaterializedView);
+    }
+    if is_unquoted_word(&tokens[first], "reset") {
+        return second
+            .is_some_and(|index| is_unquoted_word(&tokens[index], "session"))
+            .then_some(TrinoStatementKind::Session);
+    }
+    if is_unquoted_word(&tokens[first], "set") {
+        return second.and_then(|index| {
+            if is_unquoted_word(&tokens[index], "path") {
+                Some(TrinoStatementKind::Path)
+            } else if is_unquoted_word(&tokens[index], "role") {
+                Some(TrinoStatementKind::Role)
+            } else if is_unquoted_word(&tokens[index], "session") {
+                Some(TrinoStatementKind::Session)
+            } else {
+                None
+            }
+        });
+    }
+    if is_unquoted_word(&tokens[first], "show") {
+        return Some(TrinoStatementKind::Show);
+    }
+    if !(is_unquoted_word(&tokens[first], "create") || is_unquoted_word(&tokens[first], "drop")) {
+        return None;
+    }
+    let mut cursor = second?;
+    if is_unquoted_word(&tokens[cursor], "or") {
+        let replace = next_significant(tokens, cursor + 1, end)?;
+        cursor = next_significant(tokens, replace + 1, end)?;
+    }
+    if is_unquoted_word(&tokens[cursor], "catalog") {
+        Some(TrinoStatementKind::Catalog)
+    } else if is_unquoted_word(&tokens[cursor], "branch") {
+        Some(TrinoStatementKind::Branch)
+    } else if is_unquoted_word(&tokens[cursor], "role") {
+        Some(TrinoStatementKind::Role)
+    } else {
+        None
+    }
+}
+
+fn collect_custom_statement_kinds(tokens: &[TokenWithSpan]) -> Vec<TrinoStatementKind> {
+    let mut kinds = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        if let Some(kind) = custom_statement_kind(tokens, start, end) {
+            kinds.push(kind);
+        }
+        start = end.saturating_add(1);
+    }
+    kinds
+}
+
 fn syntax_error(token: &TokenWithSpan, message: &str) -> ParserError {
     ParserError::ParserError(format!(
         "{message} at Line: {}, Column: {}",
@@ -131,12 +261,22 @@ fn syntax_error(token: &TokenWithSpan, message: &str) -> ParserError {
 }
 
 fn validate_balanced_groups(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    const MAX_NESTING_DEPTH: usize = 256;
     let mut groups = Vec::new();
     for token in tokens {
         match token.token {
-            Token::LParen => groups.push((token, Token::RParen)),
-            Token::LBracket => groups.push((token, Token::RBracket)),
-            Token::LBrace => groups.push((token, Token::RBrace)),
+            Token::LParen | Token::LBracket | Token::LBrace => {
+                let expected = match token.token {
+                    Token::LParen => Token::RParen,
+                    Token::LBracket => Token::RBracket,
+                    Token::LBrace => Token::RBrace,
+                    _ => unreachable!(),
+                };
+                groups.push((token, expected));
+                if groups.len() > MAX_NESTING_DEPTH {
+                    return Err(syntax_error(token, "maximum nesting depth exceeded"));
+                }
+            }
             Token::RParen | Token::RBracket | Token::RBrace => {
                 let Some((_, expected)) = groups.pop() else {
                     return Err(syntax_error(token, "unbalanced closing group"));
@@ -267,7 +407,9 @@ fn validate_trino_create_table_forms(tokens: &[TokenWithSpan]) -> Result<(), Par
             continue;
         }
         let mut cursor = next_significant(tokens, create + 1, end);
+        let mut or_replace = false;
         if cursor.is_some_and(|index| is_unquoted_word(&tokens[index], "or")) {
+            or_replace = true;
             cursor = cursor.and_then(|index| next_significant(tokens, index + 1, end));
             if !cursor.is_some_and(|index| is_unquoted_word(&tokens[index], "replace")) {
                 start = end.saturating_add(1);
@@ -285,6 +427,13 @@ fn validate_trino_create_table_forms(tokens: &[TokenWithSpan]) -> Result<(), Par
         }
         let mut name = next_significant(tokens, table + 1, end);
         if name.is_some_and(|index| is_unquoted_word(&tokens[index], "if")) {
+            if or_replace {
+                let if_index = name.expect("checked as present");
+                return Err(syntax_error(
+                    &tokens[if_index],
+                    "CREATE TABLE cannot combine OR REPLACE with IF NOT EXISTS",
+                ));
+            }
             let not = name.and_then(|index| next_significant(tokens, index + 1, end));
             let exists = not.and_then(|index| next_significant(tokens, index + 1, end));
             if !not.is_some_and(|index| is_unquoted_word(&tokens[index], "not"))
@@ -330,6 +479,550 @@ fn validate_trino_create_table_forms(tokens: &[TokenWithSpan]) -> Result<(), Par
             ));
         }
         start = end.saturating_add(1);
+    }
+    Ok(())
+}
+
+fn create_table_name_end(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
+    let create = next_significant(tokens, start, end)?;
+    if !is_unquoted_word(&tokens[create], "create") {
+        return None;
+    }
+    let mut cursor = next_significant(tokens, create + 1, end)?;
+    if is_unquoted_word(&tokens[cursor], "or") {
+        let replace = next_significant(tokens, cursor + 1, end)?;
+        if !is_unquoted_word(&tokens[replace], "replace") {
+            return None;
+        }
+        cursor = next_significant(tokens, replace + 1, end)?;
+    }
+    if !is_unquoted_word(&tokens[cursor], "table") {
+        return None;
+    }
+    cursor = next_significant(tokens, cursor + 1, end)?;
+    if is_unquoted_word(&tokens[cursor], "if") {
+        let not = next_significant(tokens, cursor + 1, end)?;
+        let exists = next_significant(tokens, not + 1, end)?;
+        if !is_unquoted_word(&tokens[not], "not") || !is_unquoted_word(&tokens[exists], "exists") {
+            return None;
+        }
+        cursor = next_significant(tokens, exists + 1, end)?;
+    }
+    consume_qualified_name(tokens, cursor, end)
+}
+
+fn top_level_ranges(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+) -> Result<Vec<(usize, usize)>, ParserError> {
+    let mut ranges = Vec::new();
+    let mut item_start = start;
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| syntax_error(token, "unbalanced property expression"))?
+            }
+            Token::Comma if depth == 0 => {
+                if next_significant(tokens, item_start, index).is_none() {
+                    return Err(syntax_error(token, "empty item before comma"));
+                }
+                ranges.push((item_start, index));
+                item_start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err(syntax_error(
+            &tokens[start],
+            "unterminated property expression",
+        ));
+    }
+    if next_significant(tokens, item_start, end).is_none() {
+        return Err(syntax_error(
+            &tokens[end.saturating_sub(1)],
+            "empty item after comma",
+        ));
+    }
+    ranges.push((item_start, end));
+    Ok(ranges)
+}
+
+fn property_expression_metadata(
+    tokens: &[TokenWithSpan],
+    open: usize,
+    close: usize,
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    for (start, end) in top_level_ranges(tokens, open + 1, close)? {
+        if let Some(statement) = property_assignment_metadata(tokens, start, end, dialect)? {
+            metadata.push(statement);
+        }
+    }
+    Ok(metadata)
+}
+
+fn property_assignment_metadata(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    dialect: &dyn Dialect,
+) -> Result<Option<Statement>, ParserError> {
+    let key = next_significant(tokens, start, end).ok_or_else(|| {
+        syntax_error(&tokens[start.saturating_sub(1)], "property requires a name")
+    })?;
+    if !is_identifier(&tokens[key]) {
+        return Err(syntax_error(&tokens[key], "invalid property name"));
+    }
+    let eq = next_significant(tokens, key + 1, end)
+        .ok_or_else(|| syntax_error(&tokens[key], "property requires '='"))?;
+    if tokens[eq].token != Token::Eq {
+        return Err(syntax_error(&tokens[eq], "property requires '='"));
+    }
+    let value = next_significant(tokens, eq + 1, end)
+        .ok_or_else(|| syntax_error(&tokens[eq], "property requires a value"))?;
+    if is_unquoted_word(&tokens[value], "default")
+        && next_significant(tokens, value + 1, end).is_none()
+    {
+        return Ok(None);
+    }
+    parse_expression_metadata(tokens, value, end, dialect).map(Some)
+}
+
+fn find_top_level_word(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    expected: &str,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth.checked_sub(1)?;
+            }
+            _ if depth == 0 && is_unquoted_word(token, expected) => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_create_table_extensions(
+    tokens: &mut [TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    let mut statement_start = 0usize;
+    while statement_start < tokens.len() {
+        let end = statement_end(tokens, statement_start);
+        let Some(name_end) = create_table_name_end(tokens, statement_start, end) else {
+            statement_start = end.saturating_add(1);
+            continue;
+        };
+        let Some(definition) = next_significant(tokens, name_end, end) else {
+            statement_start = end.saturating_add(1);
+            continue;
+        };
+        if tokens[definition].token == Token::LParen {
+            let close = matching_rparen(tokens, definition).ok_or_else(|| {
+                syntax_error(&tokens[definition], "unterminated CREATE TABLE definition")
+            })?;
+            let as_index = find_top_level_word(tokens, close + 1, end, "as");
+            if as_index.is_some() && column_aliases_are_valid(tokens, definition, close) {
+                blank_non_whitespace(tokens, definition, close + 1);
+            } else {
+                for (element_start, element_end) in top_level_ranges(tokens, definition + 1, close)?
+                {
+                    let first = next_significant(tokens, element_start, element_end)
+                        .ok_or_else(|| syntax_error(&tokens[definition], "empty table element"))?;
+                    if is_unquoted_word(&tokens[first], "like") {
+                        let name =
+                            next_significant(tokens, first + 1, element_end).ok_or_else(|| {
+                                syntax_error(&tokens[first], "LIKE requires a table name")
+                            })?;
+                        let after_name = consume_qualified_name(tokens, name, element_end)
+                            .ok_or_else(|| {
+                                syntax_error(&tokens[name], "invalid LIKE table name")
+                            })?;
+                        if let Some(modifier) = next_significant(tokens, after_name, element_end) {
+                            if !(is_unquoted_word(&tokens[modifier], "including")
+                                || is_unquoted_word(&tokens[modifier], "excluding"))
+                            {
+                                return Err(syntax_error(
+                                    &tokens[modifier],
+                                    "LIKE accepts INCLUDING or EXCLUDING PROPERTIES",
+                                ));
+                            }
+                            let properties = next_significant(tokens, modifier + 1, element_end)
+                                .ok_or_else(|| {
+                                    syntax_error(
+                                        &tokens[modifier],
+                                        "LIKE modifier requires PROPERTIES",
+                                    )
+                                })?;
+                            if !is_unquoted_word(&tokens[properties], "properties")
+                                || next_significant(tokens, properties + 1, element_end).is_some()
+                            {
+                                return Err(syntax_error(
+                                    &tokens[properties],
+                                    "LIKE modifier requires PROPERTIES",
+                                ));
+                            }
+                            blank_non_whitespace(tokens, modifier, element_end);
+                        }
+                        continue;
+                    }
+                    let Some(with) = find_top_level_word(tokens, first + 1, element_end, "with")
+                    else {
+                        continue;
+                    };
+                    let open =
+                        next_significant(tokens, with + 1, element_end).ok_or_else(|| {
+                            syntax_error(&tokens[with], "column WITH requires properties")
+                        })?;
+                    if tokens[open].token != Token::LParen {
+                        return Err(syntax_error(&tokens[open], "column WITH requires '('"));
+                    }
+                    let properties_close = matching_rparen(tokens, open).ok_or_else(|| {
+                        syntax_error(&tokens[open], "unterminated column properties")
+                    })?;
+                    if properties_close >= element_end
+                        || next_significant(tokens, properties_close + 1, element_end).is_some()
+                    {
+                        return Err(syntax_error(
+                            &tokens[properties_close],
+                            "unexpected token after column properties",
+                        ));
+                    }
+                    metadata.extend(property_expression_metadata(
+                        tokens,
+                        open,
+                        properties_close,
+                        dialect,
+                    )?);
+                    blank_non_whitespace(tokens, with, properties_close + 1);
+                }
+            }
+        }
+        let last = previous_significant(tokens, end);
+        if let Some(data) = last.filter(|index| is_unquoted_word(&tokens[*index], "data")) {
+            let previous = previous_significant(tokens, data);
+            let with = previous.and_then(|index| {
+                if is_unquoted_word(&tokens[index], "no") {
+                    previous_significant(tokens, index)
+                } else {
+                    Some(index)
+                }
+            });
+            if let Some(with) = with.filter(|index| is_unquoted_word(&tokens[*index], "with")) {
+                blank_non_whitespace(tokens, with, data + 1);
+            }
+        }
+        statement_start = end.saturating_add(1);
+    }
+    Ok(metadata)
+}
+
+fn normalize_analyze_properties(
+    tokens: &mut [TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let Some(analyze) = next_significant(tokens, start, end) else {
+            break;
+        };
+        if !is_unquoted_word(&tokens[analyze], "analyze") {
+            start = end.saturating_add(1);
+            continue;
+        }
+        let Some(name) = next_significant(tokens, analyze + 1, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let Some(name_end) = consume_qualified_name(tokens, name, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let Some(with) = next_significant(tokens, name_end, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        if !is_unquoted_word(&tokens[with], "with") {
+            start = end.saturating_add(1);
+            continue;
+        }
+        let open = next_significant(tokens, with + 1, end)
+            .ok_or_else(|| syntax_error(&tokens[with], "ANALYZE WITH requires properties"))?;
+        if tokens[open].token != Token::LParen {
+            return Err(syntax_error(&tokens[open], "ANALYZE WITH requires '('"));
+        }
+        let close = matching_rparen(tokens, open)
+            .ok_or_else(|| syntax_error(&tokens[open], "unterminated ANALYZE properties"))?;
+        if next_significant(tokens, close + 1, end).is_some() {
+            return Err(syntax_error(
+                &tokens[close],
+                "unexpected token after ANALYZE properties",
+            ));
+        }
+        metadata.extend(property_expression_metadata(tokens, open, close, dialect)?);
+        blank_non_whitespace(tokens, with, close + 1);
+        start = end.saturating_add(1);
+    }
+    Ok(metadata)
+}
+
+fn normalize_create_view_options(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let Some(create) = next_significant(tokens, start, end) else {
+            break;
+        };
+        if !is_unquoted_word(&tokens[create], "create") {
+            start = end.saturating_add(1);
+            continue;
+        }
+        let mut cursor = next_significant(tokens, create + 1, end);
+        if cursor.is_some_and(|index| is_unquoted_word(&tokens[index], "or")) {
+            let replace = cursor.and_then(|index| next_significant(tokens, index + 1, end));
+            if !replace.is_some_and(|index| is_unquoted_word(&tokens[index], "replace")) {
+                start = end.saturating_add(1);
+                continue;
+            }
+            cursor = replace.and_then(|index| next_significant(tokens, index + 1, end));
+        }
+        let Some(view) = cursor.filter(|index| is_unquoted_word(&tokens[*index], "view")) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let Some(name) = next_significant(tokens, view + 1, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let Some(mut cursor) = consume_qualified_name(tokens, name, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        let mut ranges = Vec::new();
+        if let Some(comment) = next_significant(tokens, cursor, end)
+            .filter(|index| is_unquoted_word(&tokens[*index], "comment"))
+        {
+            let value = next_significant(tokens, comment + 1, end)
+                .ok_or_else(|| syntax_error(&tokens[comment], "VIEW COMMENT requires a string"))?;
+            if !is_single_quoted_string(&tokens[value]) {
+                return Err(syntax_error(
+                    &tokens[value],
+                    "VIEW COMMENT requires a string",
+                ));
+            }
+            cursor = value + 1;
+            ranges.push((comment, cursor));
+        }
+        if let Some(security) = next_significant(tokens, cursor, end)
+            .filter(|index| is_unquoted_word(&tokens[*index], "security"))
+        {
+            let mode = next_significant(tokens, security + 1, end)
+                .ok_or_else(|| syntax_error(&tokens[security], "VIEW SECURITY requires a mode"))?;
+            if !(is_unquoted_word(&tokens[mode], "definer")
+                || is_unquoted_word(&tokens[mode], "invoker"))
+            {
+                return Err(syntax_error(
+                    &tokens[mode],
+                    "VIEW SECURITY requires DEFINER or INVOKER",
+                ));
+            }
+            cursor = mode + 1;
+            ranges.push((security, cursor));
+        }
+        if let Some(with) = next_significant(tokens, cursor, end)
+            .filter(|index| is_unquoted_word(&tokens[*index], "with"))
+        {
+            let open = next_significant(tokens, with + 1, end)
+                .ok_or_else(|| syntax_error(&tokens[with], "VIEW WITH requires properties"))?;
+            if tokens[open].token != Token::LParen {
+                return Err(syntax_error(&tokens[open], "VIEW WITH requires '('"));
+            }
+            let close = matching_rparen(tokens, open)
+                .ok_or_else(|| syntax_error(&tokens[open], "unterminated VIEW properties"))?;
+            cursor = close + 1;
+        }
+        let Some(as_index) = next_significant(tokens, cursor, end) else {
+            start = end.saturating_add(1);
+            continue;
+        };
+        if !is_unquoted_word(&tokens[as_index], "as") || ranges.is_empty() {
+            start = end.saturating_add(1);
+            continue;
+        }
+        for (range_start, range_end) in ranges {
+            blank_non_whitespace(tokens, range_start, range_end);
+        }
+        start = end.saturating_add(1);
+    }
+    Ok(())
+}
+
+fn normalize_json_table_scalar_columns(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    for json_table in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[json_table], "json_table") {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, json_table + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(table_close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        let Some(columns) = find_top_level_word(tokens, open + 1, table_close, "columns") else {
+            continue;
+        };
+        let columns_open = next_significant(tokens, columns + 1, table_close)
+            .ok_or_else(|| syntax_error(&tokens[columns], "JSON_TABLE COLUMNS requires '('"))?;
+        if tokens[columns_open].token != Token::LParen {
+            return Err(syntax_error(
+                &tokens[columns_open],
+                "JSON_TABLE COLUMNS requires '('",
+            ));
+        }
+        let columns_close = matching_rparen(tokens, columns_open).ok_or_else(|| {
+            syntax_error(&tokens[columns_open], "unterminated JSON_TABLE COLUMNS")
+        })?;
+        for (column_start, column_end) in top_level_ranges(tokens, columns_open + 1, columns_close)?
+        {
+            if let Some(format) = find_top_level_word(tokens, column_start, column_end, "format") {
+                let json = next_significant(tokens, format + 1, column_end)
+                    .ok_or_else(|| syntax_error(&tokens[format], "FORMAT requires JSON"))?;
+                if !is_unquoted_word(&tokens[json], "json") {
+                    return Err(syntax_error(&tokens[json], "FORMAT requires JSON"));
+                }
+                let mut format_end = json + 1;
+                if let Some(encoding) = next_significant(tokens, format_end, column_end)
+                    .filter(|index| is_unquoted_word(&tokens[*index], "encoding"))
+                {
+                    let value =
+                        next_significant(tokens, encoding + 1, column_end).ok_or_else(|| {
+                            syntax_error(
+                                &tokens[encoding],
+                                "ENCODING requires UTF8, UTF16, or UTF32",
+                            )
+                        })?;
+                    if !["utf8", "utf16", "utf32"]
+                        .iter()
+                        .any(|name| is_unquoted_word(&tokens[value], name))
+                    {
+                        return Err(syntax_error(
+                            &tokens[value],
+                            "ENCODING requires UTF8, UTF16, or UTF32",
+                        ));
+                    }
+                    format_end = value + 1;
+                }
+                blank_non_whitespace(tokens, format, format_end);
+            }
+            if let Some(wrapper) = find_top_level_word(tokens, column_start, column_end, "with")
+                .or_else(|| find_top_level_word(tokens, column_start, column_end, "without"))
+            {
+                let mut cursor =
+                    next_significant(tokens, wrapper + 1, column_end).ok_or_else(|| {
+                        syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause")
+                    })?;
+                if is_unquoted_word(&tokens[cursor], "conditional")
+                    || is_unquoted_word(&tokens[cursor], "unconditional")
+                {
+                    cursor = next_significant(tokens, cursor + 1, column_end).ok_or_else(|| {
+                        syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause")
+                    })?;
+                }
+                if is_unquoted_word(&tokens[cursor], "array") {
+                    cursor = next_significant(tokens, cursor + 1, column_end).ok_or_else(|| {
+                        syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause")
+                    })?;
+                }
+                if !is_unquoted_word(&tokens[cursor], "wrapper") {
+                    return Err(syntax_error(
+                        &tokens[cursor],
+                        "wrapper clause requires WRAPPER",
+                    ));
+                }
+                let mut wrapper_end = cursor + 1;
+                if let Some(quotes) =
+                    next_significant(tokens, wrapper_end, column_end).filter(|index| {
+                        is_unquoted_word(&tokens[*index], "keep")
+                            || is_unquoted_word(&tokens[*index], "omit")
+                    })
+                {
+                    let keyword =
+                        next_significant(tokens, quotes + 1, column_end).ok_or_else(|| {
+                            syntax_error(&tokens[quotes], "KEEP/OMIT requires QUOTES")
+                        })?;
+                    if !is_unquoted_word(&tokens[keyword], "quotes") {
+                        return Err(syntax_error(&tokens[keyword], "KEEP/OMIT requires QUOTES"));
+                    }
+                    wrapper_end = keyword + 1;
+                }
+                blank_non_whitespace(tokens, wrapper, wrapper_end);
+            }
+            let mut cursor = column_start;
+            while let Some(empty) = find_top_level_word(tokens, cursor, column_end, "empty") {
+                let Some(container) = next_significant(tokens, empty + 1, column_end) else {
+                    break;
+                };
+                if !(is_unquoted_word(&tokens[container], "array")
+                    || is_unquoted_word(&tokens[container], "object"))
+                {
+                    cursor = container;
+                    continue;
+                }
+                let on = next_significant(tokens, container + 1, column_end)
+                    .ok_or_else(|| syntax_error(&tokens[container], "EMPTY value requires ON"))?;
+                let event = next_significant(tokens, on + 1, column_end)
+                    .ok_or_else(|| syntax_error(&tokens[on], "EMPTY value requires an event"))?;
+                if !is_unquoted_word(&tokens[on], "on")
+                    || !(is_unquoted_word(&tokens[event], "empty")
+                        || is_unquoted_word(&tokens[event], "error"))
+                {
+                    return Err(syntax_error(
+                        &tokens[on],
+                        "EMPTY ARRAY/OBJECT requires ON EMPTY or ON ERROR",
+                    ));
+                }
+                replace_word(&mut tokens[empty], "NULL", Keyword::NULL);
+                blank_non_whitespace(tokens, container, on);
+                cursor = event + 1;
+            }
+        }
+        if let Some(empty) = next_significant(tokens, columns_close + 1, table_close) {
+            let on = next_significant(tokens, empty + 1, table_close).ok_or_else(|| {
+                syntax_error(&tokens[empty], "JSON_TABLE EMPTY requires ON ERROR")
+            })?;
+            let error = next_significant(tokens, on + 1, table_close)
+                .ok_or_else(|| syntax_error(&tokens[on], "JSON_TABLE EMPTY requires ON ERROR"))?;
+            if !is_unquoted_word(&tokens[empty], "empty")
+                || !is_unquoted_word(&tokens[on], "on")
+                || !is_unquoted_word(&tokens[error], "error")
+                || next_significant(tokens, error + 1, table_close).is_some()
+            {
+                return Err(syntax_error(
+                    &tokens[empty],
+                    "unsupported JSON_TABLE error behavior",
+                ));
+            }
+            blank_non_whitespace(tokens, empty, error + 1);
+        }
     }
     Ok(())
 }
@@ -556,6 +1249,43 @@ fn normalize_top_identifiers(tokens: &mut [TokenWithSpan]) {
             || previous.is_some_and(|index| tokens[index].token == Token::RParen)
         {
             replace_word(&mut tokens[top], "top", Keyword::NoKeyword);
+        }
+    }
+}
+
+fn normalize_non_reserved_projection_words(tokens: &mut [TokenWithSpan]) {
+    for select in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[select], "select") {
+            continue;
+        }
+        let Some(first) = next_significant(tokens, select + 1, tokens.len()) else {
+            continue;
+        };
+        let Some(comma) = next_significant(tokens, first + 1, tokens.len()) else {
+            continue;
+        };
+        if !is_unquoted_word(&tokens[first], "all") || tokens[comma].token != Token::Comma {
+            continue;
+        }
+        let mut depth = 0usize;
+        for token in tokens.iter_mut().skip(first) {
+            match token.token {
+                Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+                _ if depth == 0 && is_unquoted_word(token, "from") => break,
+                _ if depth == 0
+                    && ["all", "some", "any"]
+                        .iter()
+                        .any(|word| is_unquoted_word(token, word)) =>
+                {
+                    let value = match &token.token {
+                        Token::Word(word) => word.value.clone(),
+                        _ => unreachable!(),
+                    };
+                    replace_word(token, &value, Keyword::NoKeyword);
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -798,7 +1528,8 @@ fn normalize_empty_grouping_elements(tokens: &mut Vec<TokenWithSpan>) {
 fn normalize_pivot_group_by(
     tokens: &mut [TokenWithSpan],
     dialect: &dyn Dialect,
-) -> Result<(), ParserError> {
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
     for pivot in 0..tokens.len() {
         if !is_unquoted_word(&tokens[pivot], "pivot")
             || !has_relation_introducer_before(tokens, pivot)
@@ -853,9 +1584,22 @@ fn normalize_pivot_group_by(
                 "invalid PIVOT GROUP BY clause",
             ));
         }
+        let source = tokens[group].clone();
+        let mut statement = Vec::with_capacity(close - group + 3);
+        statement.push(word_with_span(&source, "SELECT", Keyword::SELECT));
+        statement.push(token_with_span(
+            Token::Number("1".to_string(), false),
+            &source,
+        ));
+        statement.extend_from_slice(&tokens[group..close]);
+        statement.push(token_with_span(Token::EOF, &tokens[close]));
+        let mut parsed = Parser::new(dialect)
+            .with_tokens_with_locations(statement)
+            .parse_statements()?;
+        metadata.append(&mut parsed);
         blank_non_whitespace(tokens, group, close);
     }
-    Ok(())
+    Ok(metadata)
 }
 
 fn expression_tokens_are_valid(
@@ -888,7 +1632,8 @@ fn parse_expression_metadata(
     let mut expression = Vec::with_capacity(end - start + 2);
     expression.push(word_with_span(&tokens[source], "SELECT", Keyword::SELECT));
     expression.extend_from_slice(&tokens[start..end]);
-    expression.push(token_with_span(Token::EOF, &tokens[end]));
+    let eof_source = tokens.get(end).unwrap_or(&tokens[source]);
+    expression.push(token_with_span(Token::EOF, eof_source));
     let mut parsed = Parser::new(dialect)
         .with_tokens_with_locations(expression)
         .parse_statements()?;
@@ -901,6 +1646,384 @@ fn parse_expression_metadata(
     parsed
         .pop()
         .ok_or_else(|| syntax_error(&tokens[source], "invalid ROW field expression"))
+}
+
+fn parse_order_by_metadata(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    dialect: &dyn Dialect,
+) -> Result<Statement, ParserError> {
+    let Some(source) = next_significant(tokens, start, end) else {
+        return Err(syntax_error(
+            &tokens[start.saturating_sub(1)],
+            "ORDER BY requires a sort item",
+        ));
+    };
+    let mut statement = Vec::with_capacity(end - start + 5);
+    statement.push(word_with_span(&tokens[source], "SELECT", Keyword::SELECT));
+    statement.push(token_with_span(
+        Token::Number("1".to_string(), false),
+        &tokens[source],
+    ));
+    statement.push(word_with_span(&tokens[source], "ORDER", Keyword::ORDER));
+    statement.push(word_with_span(&tokens[source], "BY", Keyword::BY));
+    statement.extend_from_slice(&tokens[start..end]);
+    statement.push(token_with_span(Token::EOF, &tokens[end]));
+    let mut parsed = Parser::new(dialect)
+        .with_tokens_with_locations(statement)
+        .parse_statements()?;
+    if parsed.len() != 1 {
+        return Err(syntax_error(&tokens[source], "invalid ORDER BY clause"));
+    }
+    parsed
+        .pop()
+        .ok_or_else(|| syntax_error(&tokens[source], "invalid ORDER BY clause"))
+}
+
+fn table_function_call_open(tokens: &[TokenWithSpan], table: usize) -> Option<(usize, usize)> {
+    let function_open = enclosing_parentheses(tokens, table).last().copied()?;
+    let function_name = previous_significant(tokens, function_open)?;
+    if !is_identifier(&tokens[function_name]) {
+        return None;
+    }
+    let outer_open = enclosing_parentheses(tokens, function_open)
+        .last()
+        .copied()?;
+    let outer_table = previous_significant(tokens, outer_open)?;
+    if !is_unquoted_word(&tokens[outer_table], "table") {
+        return None;
+    }
+    matching_rparen(tokens, function_open).map(|close| (function_open, close))
+}
+
+fn table_argument_boundary(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    function_close: usize,
+    terminators: &[&str],
+) -> usize {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(function_close).skip(start) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace if depth > 0 => depth -= 1,
+            Token::Comma if depth == 0 => return index,
+            _ if depth == 0 && terminators.iter().any(|word| is_unquoted_word(token, word)) => {
+                return index
+            }
+            _ => {}
+        }
+    }
+    function_close
+}
+
+fn table_argument_option(token: &TokenWithSpan) -> bool {
+    ["partition", "prune", "keep", "order", "copartition"]
+        .iter()
+        .any(|word| is_unquoted_word(token, word))
+}
+
+fn normalize_table_function_arguments(
+    tokens: &mut [TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    for table in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[table], "table") {
+            continue;
+        }
+        let Some((_, function_close)) = table_function_call_open(tokens, table) else {
+            continue;
+        };
+        let Some(open) = next_significant(tokens, table + 1, function_close) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(relation_close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        if relation_close >= function_close {
+            continue;
+        }
+        let Some(relation_start) = next_significant(tokens, open + 1, relation_close) else {
+            return Err(syntax_error(
+                &tokens[open],
+                "table function table argument requires a relation",
+            ));
+        };
+        if is_root_query_start(&tokens[relation_start]) {
+            let mut query = tokens[open + 1..relation_close].to_vec();
+            query.push(token_with_span(Token::EOF, &tokens[relation_close]));
+            let mut parsed = Parser::new(dialect)
+                .with_tokens_with_locations(query)
+                .parse_statements()?;
+            if parsed.len() != 1 {
+                return Err(syntax_error(
+                    &tokens[relation_start],
+                    "table argument query must contain one query",
+                ));
+            }
+            metadata.append(&mut parsed);
+            replace_word(
+                &mut tokens[relation_start],
+                "__trino_table_argument",
+                Keyword::NoKeyword,
+            );
+            blank_non_whitespace(tokens, relation_start + 1, relation_close);
+        }
+        let Some(mut cursor) = next_significant(tokens, relation_close + 1, function_close) else {
+            continue;
+        };
+        if tokens[cursor].token == Token::Comma || is_unquoted_word(&tokens[cursor], "copartition")
+        {
+            continue;
+        }
+        let suffix_start = cursor;
+
+        if is_unquoted_word(&tokens[cursor], "as") {
+            cursor = next_significant(tokens, cursor + 1, function_close).ok_or_else(|| {
+                syntax_error(&tokens[suffix_start], "table alias requires a name")
+            })?;
+            if !is_identifier(&tokens[cursor]) {
+                return Err(syntax_error(
+                    &tokens[cursor],
+                    "invalid table argument alias",
+                ));
+            }
+            cursor = next_significant(tokens, cursor + 1, function_close).unwrap_or(function_close);
+            if cursor < function_close && tokens[cursor].token == Token::LParen {
+                let close = matching_rparen(tokens, cursor).ok_or_else(|| {
+                    syntax_error(
+                        &tokens[cursor],
+                        "unterminated table argument column aliases",
+                    )
+                })?;
+                if !column_aliases_are_valid(tokens, cursor, close) {
+                    return Err(syntax_error(
+                        &tokens[cursor],
+                        "table argument aliases require a nonempty column list",
+                    ));
+                }
+                cursor =
+                    next_significant(tokens, close + 1, function_close).unwrap_or(function_close);
+            }
+        } else if is_identifier(&tokens[cursor]) && !table_argument_option(&tokens[cursor]) {
+            cursor = next_significant(tokens, cursor + 1, function_close).unwrap_or(function_close);
+            if cursor < function_close && tokens[cursor].token == Token::LParen {
+                let close = matching_rparen(tokens, cursor).ok_or_else(|| {
+                    syntax_error(
+                        &tokens[cursor],
+                        "unterminated table argument column aliases",
+                    )
+                })?;
+                if !column_aliases_are_valid(tokens, cursor, close) {
+                    return Err(syntax_error(
+                        &tokens[cursor],
+                        "table argument aliases require a nonempty column list",
+                    ));
+                }
+                cursor =
+                    next_significant(tokens, close + 1, function_close).unwrap_or(function_close);
+            }
+        }
+
+        if cursor < function_close && is_unquoted_word(&tokens[cursor], "partition") {
+            let by = next_significant(tokens, cursor + 1, function_close)
+                .ok_or_else(|| syntax_error(&tokens[cursor], "PARTITION requires BY"))?;
+            if !is_unquoted_word(&tokens[by], "by") {
+                return Err(syntax_error(&tokens[by], "PARTITION requires BY"));
+            }
+            let start = next_significant(tokens, by + 1, function_close)
+                .ok_or_else(|| syntax_error(&tokens[by], "PARTITION BY requires an expression"))?;
+            if tokens[start].token == Token::LParen {
+                let close = matching_rparen(tokens, start).ok_or_else(|| {
+                    syntax_error(&tokens[start], "unterminated PARTITION BY expression list")
+                })?;
+                if close >= function_close {
+                    return Err(syntax_error(&tokens[start], "invalid PARTITION BY clause"));
+                }
+                if next_significant(tokens, start + 1, close).is_some() {
+                    metadata.push(parse_expression_metadata(
+                        tokens,
+                        start + 1,
+                        close,
+                        dialect,
+                    )?);
+                }
+                cursor =
+                    next_significant(tokens, close + 1, function_close).unwrap_or(function_close);
+            } else {
+                let end = table_argument_boundary(
+                    tokens,
+                    start,
+                    function_close,
+                    &["prune", "keep", "order", "copartition"],
+                );
+                if next_significant(tokens, start, end).is_none() {
+                    return Err(syntax_error(
+                        &tokens[start],
+                        "PARTITION BY requires an expression",
+                    ));
+                }
+                metadata.push(parse_expression_metadata(tokens, start, end, dialect)?);
+                cursor = next_significant(tokens, end, function_close).unwrap_or(function_close);
+            }
+        }
+
+        if cursor < function_close
+            && (is_unquoted_word(&tokens[cursor], "prune")
+                || is_unquoted_word(&tokens[cursor], "keep"))
+        {
+            let treatment = cursor;
+            let when = next_significant(tokens, cursor + 1, function_close).ok_or_else(|| {
+                syntax_error(&tokens[treatment], "table treatment requires WHEN EMPTY")
+            })?;
+            let empty = next_significant(tokens, when + 1, function_close).ok_or_else(|| {
+                syntax_error(&tokens[treatment], "table treatment requires WHEN EMPTY")
+            })?;
+            if !is_unquoted_word(&tokens[when], "when")
+                || !is_unquoted_word(&tokens[empty], "empty")
+            {
+                return Err(syntax_error(
+                    &tokens[treatment],
+                    "table treatment requires WHEN EMPTY",
+                ));
+            }
+            cursor = next_significant(tokens, empty + 1, function_close).unwrap_or(function_close);
+        }
+
+        if cursor < function_close && is_unquoted_word(&tokens[cursor], "order") {
+            let by = next_significant(tokens, cursor + 1, function_close)
+                .ok_or_else(|| syntax_error(&tokens[cursor], "ORDER requires BY"))?;
+            if !is_unquoted_word(&tokens[by], "by") {
+                return Err(syntax_error(&tokens[by], "ORDER requires BY"));
+            }
+            let start = next_significant(tokens, by + 1, function_close)
+                .ok_or_else(|| syntax_error(&tokens[by], "ORDER BY requires a sort item"))?;
+            if tokens[start].token == Token::LParen {
+                let close = matching_rparen(tokens, start).ok_or_else(|| {
+                    syntax_error(&tokens[start], "unterminated ORDER BY sort list")
+                })?;
+                if close >= function_close || next_significant(tokens, start + 1, close).is_none() {
+                    return Err(syntax_error(
+                        &tokens[start],
+                        "ORDER BY requires a sort item",
+                    ));
+                }
+                metadata.push(parse_order_by_metadata(tokens, start + 1, close, dialect)?);
+                cursor =
+                    next_significant(tokens, close + 1, function_close).unwrap_or(function_close);
+            } else {
+                let end = table_argument_boundary(tokens, start, function_close, &["copartition"]);
+                metadata.push(parse_order_by_metadata(tokens, start, end, dialect)?);
+                cursor = next_significant(tokens, end, function_close).unwrap_or(function_close);
+            }
+        }
+
+        if cursor < function_close
+            && tokens[cursor].token != Token::Comma
+            && !is_unquoted_word(&tokens[cursor], "copartition")
+        {
+            return Err(syntax_error(
+                &tokens[cursor],
+                "unexpected token in table function table argument",
+            ));
+        }
+        blank_non_whitespace(tokens, suffix_start, cursor);
+    }
+    Ok(metadata)
+}
+
+fn normalize_table_function_copartition(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    for copartition in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[copartition], "copartition") {
+            continue;
+        }
+        let Some((_, function_close)) = table_function_call_open(tokens, copartition) else {
+            continue;
+        };
+        if previous_significant(tokens, copartition).is_some_and(|previous| {
+            if tokens[previous].token != Token::RParen {
+                return false;
+            }
+            matching_lparen(tokens, previous)
+                .and_then(|open| previous_significant(tokens, open))
+                .is_some_and(|word| is_unquoted_word(&tokens[word], "table"))
+        }) {
+            return Err(syntax_error(
+                &tokens[copartition],
+                "ambiguous COPARTITION after an unaliased table argument",
+            ));
+        }
+        let mut cursor = next_significant(tokens, copartition + 1, function_close)
+            .ok_or_else(|| syntax_error(&tokens[copartition], "COPARTITION requires tables"))?;
+        loop {
+            if tokens[cursor].token != Token::LParen {
+                return Err(syntax_error(
+                    &tokens[cursor],
+                    "COPARTITION requires a parenthesized table list",
+                ));
+            }
+            let close = matching_rparen(tokens, cursor).ok_or_else(|| {
+                syntax_error(&tokens[cursor], "unterminated COPARTITION table list")
+            })?;
+            let first = next_significant(tokens, cursor + 1, close).ok_or_else(|| {
+                syntax_error(&tokens[cursor], "COPARTITION requires at least two tables")
+            })?;
+            let first_end = consume_qualified_name(tokens, first, close)
+                .ok_or_else(|| syntax_error(&tokens[first], "invalid COPARTITION table name"))?;
+            let comma = next_significant(tokens, first_end, close).ok_or_else(|| {
+                syntax_error(&tokens[first], "COPARTITION requires at least two tables")
+            })?;
+            if tokens[comma].token != Token::Comma {
+                return Err(syntax_error(
+                    &tokens[comma],
+                    "COPARTITION tables must be comma-separated",
+                ));
+            }
+            let mut table = next_significant(tokens, comma + 1, close).ok_or_else(|| {
+                syntax_error(&tokens[comma], "COPARTITION requires a table after comma")
+            })?;
+            loop {
+                let table_end = consume_qualified_name(tokens, table, close).ok_or_else(|| {
+                    syntax_error(&tokens[table], "invalid COPARTITION table name")
+                })?;
+                let Some(separator) = next_significant(tokens, table_end, close) else {
+                    break;
+                };
+                if tokens[separator].token != Token::Comma {
+                    return Err(syntax_error(
+                        &tokens[separator],
+                        "COPARTITION tables must be comma-separated",
+                    ));
+                }
+                table = next_significant(tokens, separator + 1, close).ok_or_else(|| {
+                    syntax_error(
+                        &tokens[separator],
+                        "COPARTITION requires a table after comma",
+                    )
+                })?;
+            }
+            cursor = next_significant(tokens, close + 1, function_close).unwrap_or(function_close);
+            if cursor == function_close {
+                blank_non_whitespace(tokens, copartition, function_close);
+                break;
+            }
+            if tokens[cursor].token != Token::Comma {
+                return Err(syntax_error(
+                    &tokens[cursor],
+                    "unexpected token after COPARTITION table list",
+                ));
+            }
+            cursor = next_significant(tokens, cursor + 1, function_close).ok_or_else(|| {
+                syntax_error(&tokens[cursor], "COPARTITION requires another table list")
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn row_field_ranges(
@@ -1460,14 +2583,23 @@ fn is_values_relation_position(tokens: &[TokenWithSpan], values: usize) -> bool 
     if has_relation_introducer_before(tokens, values) {
         return true;
     }
-    if next_significant(tokens, statement_start(tokens, values), values) == Some(values) {
+    let statement_start = statement_start(tokens, values);
+    if next_significant(tokens, statement_start, values) == Some(values) {
+        return true;
+    }
+    let first = next_significant(tokens, statement_start, values);
+    let second = first.and_then(|index| next_significant(tokens, index + 1, values));
+    if first.is_some_and(|index| is_unquoted_word(&tokens[index], "insert"))
+        && second.is_some_and(|index| is_unquoted_word(&tokens[index], "into"))
+        && enclosing_parentheses(tokens, values).is_empty()
+    {
         return true;
     }
     let Some(open) = enclosing_parentheses(tokens, values).last().copied() else {
         return false;
     };
     previous_significant(tokens, open).is_some_and(|previous| {
-        ["from", "join", "lateral", "as"]
+        ["from", "join", "lateral", "as", "all", "any", "some"]
             .iter()
             .any(|word| is_unquoted_word(&tokens[previous], word))
     })
@@ -1527,6 +2659,53 @@ fn values_relation_expression_ranges(
     }
     expressions.push((start, end));
     Ok(Some(expressions))
+}
+
+fn normalize_quantified_values(
+    tokens: &mut [TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    for values in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[values], "values") {
+            continue;
+        }
+        let Some(open) = enclosing_parentheses(tokens, values).last().copied() else {
+            continue;
+        };
+        let Some(quantifier) = previous_significant(tokens, open) else {
+            continue;
+        };
+        if !["all", "any", "some"]
+            .iter()
+            .any(|word| is_unquoted_word(&tokens[quantifier], word))
+        {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        let Some(expressions) = values_relation_expression_ranges(tokens, values, close)? else {
+            continue;
+        };
+        if expressions.is_empty() {
+            return Err(syntax_error(
+                &tokens[values],
+                "quantified VALUES requires an expression",
+            ));
+        }
+        for (start, end) in expressions {
+            metadata.push(parse_expression_metadata(tokens, start, end, dialect)?);
+        }
+        replace_word(&mut tokens[values], "SELECT", Keyword::SELECT);
+        let expression = next_significant(tokens, values + 1, close).ok_or_else(|| {
+            syntax_error(&tokens[values], "quantified VALUES requires an expression")
+        })?;
+        tokens[expression] =
+            token_with_span(Token::Number("1".to_string(), false), &tokens[expression]);
+        blank_non_whitespace(tokens, expression + 1, close);
+    }
+    Ok(metadata)
 }
 
 fn normalize_scalar_values_relations(
@@ -1736,58 +2915,25 @@ fn is_inline_function_query_start(tokens: &[TokenWithSpan], index: usize, end: u
     })
 }
 
-fn inline_function_return(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (index, token) in tokens.iter().enumerate().take(end).skip(start + 1) {
-        if matches!(token.token, Token::Whitespace(_)) {
-            continue;
-        }
-        if depth == 0 && is_unquoted_word(token, "return") {
-            return Some(index);
-        }
-        match token.token {
-            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
-            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.checked_sub(1)?,
-            _ => {}
-        }
-    }
-    None
-}
-
-fn inline_function_boundary(
+fn parse_inline_function_declaration(
     tokens: &[TokenWithSpan],
     function: usize,
     end: usize,
-) -> Result<usize, ParserError> {
-    let Some(return_index) = inline_function_return(tokens, function, end) else {
-        return Err(syntax_error(
-            &tokens[function],
-            "WITH FUNCTION is missing its RETURN expression",
-        ));
-    };
-    let Some(body) = next_significant(tokens, return_index + 1, end) else {
-        return Err(syntax_error(
-            &tokens[return_index],
-            "WITH FUNCTION is missing its RETURN expression",
-        ));
-    };
-    if !matches!(tokens[body].token, Token::LParen) && is_root_query_start(&tokens[body]) {
-        return Err(syntax_error(
-            &tokens[body],
-            "WITH FUNCTION is missing its RETURN expression",
-        ));
-    }
-
+    dialect: &dyn Dialect,
+) -> Result<(usize, Statement), ParserError> {
     let mut depth = 0usize;
-    for (index, token) in tokens.iter().enumerate().take(end).skip(body) {
+    let mut last_error = None;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(function + 1) {
         if matches!(token.token, Token::Whitespace(_)) {
             continue;
         }
         if depth == 0
-            && index != body
             && (token.token == Token::Comma || is_inline_function_query_start(tokens, index, end))
         {
-            return Ok(index);
+            match parse_inline_function(tokens, function, index, dialect) {
+                Ok(statement) => return Ok((index, statement)),
+                Err(error) => last_error = Some(error),
+            }
         }
         match token.token {
             Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
@@ -1799,10 +2945,12 @@ fn inline_function_boundary(
             _ => {}
         }
     }
-    Err(syntax_error(
-        &tokens[function],
-        "WITH FUNCTION requires a following query",
-    ))
+    Err(last_error.unwrap_or_else(|| {
+        syntax_error(
+            &tokens[function],
+            "WITH FUNCTION requires a complete declaration and following query",
+        )
+    }))
 }
 
 fn parse_inline_function(
@@ -1841,26 +2989,28 @@ fn normalize_inline_functions(
     let mut declarations = Vec::new();
     let mut start = 0usize;
     while start < tokens.len() {
-        let end = statement_end(tokens, start);
-        let Some(with) = next_significant(tokens, start, end) else {
+        let ordinary_end = statement_end(tokens, start);
+        let Some(with) = next_significant(tokens, start, ordinary_end) else {
             break;
         };
         if !is_unquoted_word(&tokens[with], "with") {
-            start = end.saturating_add(1);
+            start = ordinary_end.saturating_add(1);
             continue;
         }
-        let Some(mut function) = next_significant(tokens, with + 1, end) else {
-            start = end.saturating_add(1);
+        let Some(mut function) = next_significant(tokens, with + 1, tokens.len()) else {
+            start = ordinary_end.saturating_add(1);
             continue;
         };
         if !is_unquoted_word(&tokens[function], "function") {
-            start = end.saturating_add(1);
+            start = ordinary_end.saturating_add(1);
             continue;
         }
+        let end = tokens.len();
 
-        loop {
-            let boundary = inline_function_boundary(tokens, function, end)?;
-            declarations.push(parse_inline_function(tokens, function, boundary, dialect)?);
+        let query_start = loop {
+            let (boundary, declaration) =
+                parse_inline_function_declaration(tokens, function, end, dialect)?;
+            declarations.push(declaration);
             if tokens[boundary].token == Token::Comma {
                 let Some(next_function) = next_significant(tokens, boundary + 1, end) else {
                     return Err(syntax_error(
@@ -1878,9 +3028,9 @@ fn normalize_inline_functions(
                 continue;
             }
             blank_non_whitespace(tokens, with, boundary);
-            break;
-        }
-        start = end.saturating_add(1);
+            break boundary;
+        };
+        start = statement_end(tokens, query_start).saturating_add(1);
     }
     Ok(declarations)
 }
@@ -1913,11 +3063,18 @@ fn session_property_value_end(tokens: &[TokenWithSpan], start: usize, end: usize
         if matches!(token, Token::Whitespace(_)) {
             continue;
         }
-        if depth == 0
-            && value
-            && (matches!(token, Token::Comma) || is_root_query_start(&tokens[index]))
-        {
-            return Some(index);
+        if depth == 0 && value {
+            if matches!(token, Token::Comma) {
+                return Some(index);
+            }
+            if is_root_query_start(&tokens[index]) {
+                let parenthesized_query = matches!(token, Token::LParen)
+                    && next_significant(tokens, index + 1, end)
+                        .is_some_and(|next| is_root_query_start(&tokens[next]));
+                if !matches!(token, Token::LParen) || parenthesized_query {
+                    return Some(index);
+                }
+            }
         }
         match token {
             Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
@@ -1949,7 +3106,7 @@ fn with_session_query_start(
     start: usize,
     end: usize,
     dialect: &dyn Dialect,
-) -> Option<usize> {
+) -> Option<(usize, Vec<(usize, usize)>)> {
     let with = next_significant(tokens, start, end)?;
     if !is_unquoted_word(&tokens[with], "with") {
         return None;
@@ -1959,6 +3116,7 @@ fn with_session_query_start(
         return None;
     }
     let mut property = next_significant(tokens, session + 1, end)?;
+    let mut values = Vec::new();
     loop {
         let after_name = consume_qualified_name(tokens, property, end)?;
         let equals = next_significant(tokens, after_name, end)?;
@@ -1970,23 +3128,37 @@ fn with_session_query_start(
         if !session_property_value_is_valid(tokens, value_start, value_end, dialect) {
             return None;
         }
+        values.push((value_start, value_end));
         if tokens[value_end].token == Token::Comma {
             property = next_significant(tokens, value_end + 1, end)?;
             continue;
         }
-        return is_root_query_start(&tokens[value_end]).then_some(value_end);
+        return is_root_query_start(&tokens[value_end]).then_some((value_end, values));
     }
 }
 
-fn normalize_with_session(tokens: &mut [TokenWithSpan], dialect: &dyn Dialect) {
+fn normalize_with_session(
+    tokens: &mut [TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
     let mut start = 0usize;
     while start < tokens.len() {
         let end = statement_end(tokens, start);
-        if let Some(query_start) = with_session_query_start(tokens, start, end, dialect) {
+        if let Some((query_start, values)) = with_session_query_start(tokens, start, end, dialect) {
+            for (value_start, value_end) in values {
+                metadata.push(parse_expression_metadata(
+                    tokens,
+                    value_start,
+                    value_end,
+                    dialect,
+                )?);
+            }
             blank_non_whitespace(tokens, start, query_start);
         }
         start = end.saturating_add(1);
     }
+    Ok(metadata)
 }
 
 fn dml_target_start(tokens: &[TokenWithSpan], at: usize) -> Option<usize> {
@@ -2108,6 +3280,250 @@ fn normalize_trino_non_decimal_integer_literals(tokens: &mut [TokenWithSpan]) {
     }
 }
 
+fn normalize_between_symmetry(tokens: &mut [TokenWithSpan]) {
+    for modifier in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[modifier], "symmetric")
+            && !is_unquoted_word(&tokens[modifier], "asymmetric")
+        {
+            continue;
+        }
+        if previous_significant(tokens, modifier)
+            .is_some_and(|between| is_unquoted_word(&tokens[between], "between"))
+        {
+            tokens[modifier].token = Token::Whitespace(Whitespace::Space);
+        }
+    }
+}
+
+fn normalize_trim_without_character(tokens: &mut Vec<TokenWithSpan>) {
+    for trim in (0..tokens.len()).rev() {
+        if !is_unquoted_word(&tokens[trim], "trim") {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, trim + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(specification) = next_significant(tokens, open + 1, tokens.len()) else {
+            continue;
+        };
+        if !["both", "leading", "trailing"]
+            .iter()
+            .any(|word| is_unquoted_word(&tokens[specification], word))
+        {
+            continue;
+        }
+        let Some(from) = next_significant(tokens, specification + 1, tokens.len()) else {
+            continue;
+        };
+        if is_unquoted_word(&tokens[from], "from") {
+            tokens.insert(
+                from,
+                token_with_span(
+                    Token::SingleQuotedString(" ".to_string()),
+                    &tokens[specification],
+                ),
+            );
+        }
+    }
+}
+
+fn normalize_empty_lambdas(tokens: &mut Vec<TokenWithSpan>) {
+    for open in (0..tokens.len()).rev() {
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        if next_significant(tokens, open + 1, close).is_some() {
+            continue;
+        }
+        let Some(arrow) = next_significant(tokens, close + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[arrow].token == Token::Arrow {
+            tokens.insert(
+                close,
+                word_with_span(&tokens[open], "__trino_empty_lambda", Keyword::NoKeyword),
+            );
+        }
+    }
+}
+
+fn is_method_receiver_end(token: &TokenWithSpan) -> bool {
+    matches!(
+        token.token,
+        Token::RParen
+            | Token::RBracket
+            | Token::SingleQuotedString(_)
+            | Token::UnicodeStringLiteral(_)
+            | Token::Number(_, _)
+    )
+}
+
+fn normalize_method_calls(tokens: &mut Vec<TokenWithSpan>) {
+    for separator in (0..tokens.len()).rev() {
+        if tokens[separator].token == Token::DoubleColon {
+            let Some(receiver) = previous_significant(tokens, separator) else {
+                continue;
+            };
+            let Some(method) = next_significant(tokens, separator + 1, tokens.len()) else {
+                continue;
+            };
+            let Some(open) = next_significant(tokens, method + 1, tokens.len()) else {
+                continue;
+            };
+            if is_identifier(&tokens[receiver])
+                && is_identifier(&tokens[method])
+                && tokens[open].token == Token::LParen
+            {
+                tokens[separator].token = Token::Period;
+            }
+            continue;
+        }
+        if tokens[separator].token != Token::Period {
+            continue;
+        }
+        let Some(receiver) = previous_significant(tokens, separator) else {
+            continue;
+        };
+        let Some(method) = next_significant(tokens, separator + 1, tokens.len()) else {
+            continue;
+        };
+        let Some(open) = next_significant(tokens, method + 1, tokens.len()) else {
+            continue;
+        };
+        if is_method_receiver_end(&tokens[receiver])
+            && is_identifier(&tokens[method])
+            && tokens[open].token == Token::LParen
+        {
+            tokens[separator].token = Token::Plus;
+            if let Some(close) = matching_rparen(tokens, open) {
+                if next_significant(tokens, open + 1, close).is_none() {
+                    tokens.insert(
+                        close,
+                        word_with_span(&tokens[method], "NULL", Keyword::NULL),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn normalize_pattern_processing_modes(tokens: &mut [TokenWithSpan]) {
+    for mode in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[mode], "running") && !is_unquoted_word(&tokens[mode], "final")
+        {
+            continue;
+        }
+        let Some(function) = next_significant(tokens, mode + 1, tokens.len()) else {
+            continue;
+        };
+        let Some(open) = next_significant(tokens, function + 1, tokens.len()) else {
+            continue;
+        };
+        if is_identifier(&tokens[function]) && tokens[open].token == Token::LParen {
+            tokens[mode].token = Token::Whitespace(Whitespace::Space);
+        }
+    }
+}
+
+fn valid_unicode_escape_character(value: &str) -> Option<char> {
+    let mut chars = value.chars();
+    let character = chars.next()?;
+    if chars.next().is_some()
+        || character.is_ascii_hexdigit()
+        || character == '+'
+        || character == '\''
+        || character == '"'
+        || character.is_whitespace()
+    {
+        return None;
+    }
+    Some(character)
+}
+
+fn validate_unicode_string(value: &str, escape: char) -> bool {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] != escape {
+            index += 1;
+            continue;
+        }
+        if chars.get(index + 1) == Some(&escape) {
+            index += 2;
+            continue;
+        }
+        let (digits, start) = if chars.get(index + 1) == Some(&'+') {
+            (6, index + 2)
+        } else {
+            (4, index + 1)
+        };
+        let end = start + digits;
+        if end > chars.len()
+            || !chars[start..end]
+                .iter()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return false;
+        }
+        let codepoint = chars[start..end]
+            .iter()
+            .collect::<String>()
+            .chars()
+            .fold(0u32, |value, character| {
+                value * 16 + character.to_digit(16).unwrap_or(0)
+            });
+        if char::from_u32(codepoint).is_none() || (0xD800..=0xDFFF).contains(&codepoint) {
+            return false;
+        }
+        index = end;
+    }
+    true
+}
+
+fn normalize_unicode_escapes(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    for unicode in 0..tokens.len() {
+        let Token::UnicodeStringLiteral(value) = &tokens[unicode].token else {
+            continue;
+        };
+        let value = value.clone();
+        let mut escape_clause = None;
+        if let Some(uescape) = next_significant(tokens, unicode + 1, tokens.len()) {
+            if is_unquoted_word(&tokens[uescape], "uescape") {
+                let literal =
+                    next_significant(tokens, uescape + 1, tokens.len()).ok_or_else(|| {
+                        syntax_error(&tokens[uescape], "UESCAPE requires a character literal")
+                    })?;
+                let Token::SingleQuotedString(character) = &tokens[literal].token else {
+                    return Err(syntax_error(
+                        &tokens[literal],
+                        "UESCAPE requires a character literal",
+                    ));
+                };
+                let escape = valid_unicode_escape_character(character).ok_or_else(|| {
+                    syntax_error(&tokens[literal], "invalid Unicode escape character")
+                })?;
+                escape_clause = Some((uescape, literal, escape));
+            }
+        }
+        if let Some((uescape, literal, escape)) = escape_clause {
+            if !validate_unicode_string(&value, escape) {
+                return Err(syntax_error(
+                    &tokens[unicode],
+                    "invalid Unicode escape sequence",
+                ));
+            }
+            blank_non_whitespace(tokens, uescape, literal + 1);
+        }
+    }
+    Ok(())
+}
+
 fn validate_trino_identifiers(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
     for token in tokens {
         if matches!(
@@ -2174,6 +3590,366 @@ fn is_type_context(tokens: &[TokenWithSpan], index: usize) -> bool {
     previous_is_type_marker
         || is_in_create_type_declaration(tokens, index)
         || statement_starts_with(tokens, index, Keyword::ALTER)
+}
+
+fn is_cast_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
+    for open in enclosing_parentheses(tokens, index).into_iter().rev() {
+        let Some(function) = previous_significant(tokens, open) else {
+            continue;
+        };
+        if !is_unquoted_word(&tokens[function], "cast")
+            && !is_unquoted_word(&tokens[function], "try_cast")
+        {
+            continue;
+        }
+        let mut depth = 0usize;
+        for token in tokens.iter().take(index).skip(open + 1) {
+            match token.token {
+                Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+                Token::RParen | Token::RBracket | Token::RBrace if depth > 0 => depth -= 1,
+                _ if depth == 0 && is_unquoted_word(token, "as") => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+fn is_structural_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
+    if is_type_context(tokens, index) || is_cast_type_position(tokens, index) {
+        return true;
+    }
+    enclosing_parentheses(tokens, index)
+        .into_iter()
+        .rev()
+        .filter_map(|open| previous_significant(tokens, open))
+        .any(|container| {
+            (is_type_container(&tokens[container])
+                || is_unquoted_word(&tokens[container], "struct"))
+                && (is_type_context(tokens, container) || is_cast_type_position(tokens, container))
+        })
+}
+
+fn normalize_datetime_type_parameters(tokens: &mut [TokenWithSpan]) {
+    for data_type in 0..tokens.len() {
+        if (!is_unquoted_word(&tokens[data_type], "time")
+            && !is_unquoted_word(&tokens[data_type], "timestamp"))
+            || !is_structural_type_position(tokens, data_type)
+        {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, data_type + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        let Some(parameter) = next_significant(tokens, open + 1, close) else {
+            continue;
+        };
+        if next_significant(tokens, parameter + 1, close).is_none()
+            && matches!(tokens[parameter].token, Token::Word(_))
+        {
+            tokens[parameter].token = Token::Number("0".to_string(), false);
+        }
+    }
+}
+
+fn interval_precision_is_valid(
+    tokens: &[TokenWithSpan],
+    open: usize,
+    close: usize,
+    maximum_parameters: usize,
+) -> bool {
+    let mut cursor = match next_significant(tokens, open + 1, close) {
+        Some(cursor) => cursor,
+        None => return false,
+    };
+    let mut parameters = 0usize;
+    loop {
+        if !matches!(tokens[cursor].token, Token::Number(_, false)) {
+            return false;
+        }
+        parameters += 1;
+        let Some(comma) = next_significant(tokens, cursor + 1, close) else {
+            return parameters <= maximum_parameters;
+        };
+        if tokens[comma].token != Token::Comma || parameters >= maximum_parameters {
+            return false;
+        }
+        let Some(parameter) = next_significant(tokens, comma + 1, close) else {
+            return false;
+        };
+        cursor = parameter;
+    }
+}
+
+fn normalize_interval_type_precision(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    for interval in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[interval], "interval")
+            || !is_structural_type_position(tokens, interval)
+        {
+            continue;
+        }
+        let Some(start_unit) = next_significant(tokens, interval + 1, tokens.len()) else {
+            continue;
+        };
+        if !is_interval_unit(&tokens[start_unit]) {
+            continue;
+        }
+        let mut cursor = next_significant(tokens, start_unit + 1, tokens.len());
+        if cursor.is_some_and(|open| tokens[open].token == Token::LParen) {
+            let open = cursor.unwrap_or(start_unit);
+            let close = matching_rparen(tokens, open)
+                .ok_or_else(|| syntax_error(&tokens[open], "unterminated interval precision"))?;
+            let maximum = if is_unquoted_word(&tokens[start_unit], "second") {
+                2
+            } else {
+                1
+            };
+            if !interval_precision_is_valid(tokens, open, close, maximum) {
+                return Err(syntax_error(&tokens[open], "invalid interval precision"));
+            }
+            blank_non_whitespace(tokens, open, close + 1);
+            cursor = next_significant(tokens, close + 1, tokens.len());
+        }
+        let Some(to) = cursor else {
+            continue;
+        };
+        if !is_unquoted_word(&tokens[to], "to") {
+            continue;
+        }
+        let Some(end_unit) = next_significant(tokens, to + 1, tokens.len()) else {
+            continue;
+        };
+        let Some(open) = next_significant(tokens, end_unit + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let close = matching_rparen(tokens, open)
+            .ok_or_else(|| syntax_error(&tokens[open], "unterminated interval precision"))?;
+        if !is_unquoted_word(&tokens[end_unit], "second")
+            || !interval_precision_is_valid(tokens, open, close, 1)
+        {
+            return Err(syntax_error(&tokens[open], "invalid interval precision"));
+        }
+        blank_non_whitespace(tokens, open, close + 1);
+    }
+    Ok(())
+}
+
+fn normalize_legacy_map_types(tokens: &mut [TokenWithSpan]) -> Result<(), ParserError> {
+    for map in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[map], "map") || !is_structural_type_position(tokens, map) {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, map + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token == Token::Lt {
+            let close = matching_gt(tokens, open)
+                .ok_or_else(|| syntax_error(&tokens[open], "unterminated MAP type"))?;
+            let mut depth = 0usize;
+            let mut comma = None;
+            for (index, token) in tokens.iter().enumerate().take(close).skip(open + 1) {
+                match token.token {
+                    Token::Lt | Token::LParen | Token::LBracket => depth += 1,
+                    Token::Gt | Token::RParen | Token::RBracket if depth > 0 => depth -= 1,
+                    Token::Comma if depth == 0 => {
+                        if comma.is_some() {
+                            return Err(syntax_error(
+                                token,
+                                "MAP type requires exactly two parameters",
+                            ));
+                        }
+                        comma = Some(index);
+                    }
+                    _ => {}
+                }
+            }
+            let comma = comma.ok_or_else(|| {
+                syntax_error(&tokens[open], "MAP type requires exactly two parameters")
+            })?;
+            if next_significant(tokens, open + 1, comma).is_none()
+                || next_significant(tokens, comma + 1, close).is_none()
+            {
+                return Err(syntax_error(
+                    &tokens[comma],
+                    "MAP type requires exactly two parameters",
+                ));
+            }
+            replace_word(&mut tokens[map], "STRUCT", Keyword::STRUCT);
+        }
+    }
+    Ok(())
+}
+
+fn postfix_array_base(tokens: &[TokenWithSpan], array: usize) -> bool {
+    let Some(previous) = previous_significant(tokens, array) else {
+        return false;
+    };
+    match tokens[previous].token {
+        Token::Word(_) => is_known_type_name(&tokens[previous]),
+        Token::RParen => matching_lparen(tokens, previous)
+            .and_then(|open| previous_significant(tokens, open))
+            .is_some_and(|word| is_probable_type_name(&tokens[word])),
+        Token::Gt | Token::RBracket => true,
+        _ => false,
+    }
+}
+
+fn normalize_postfix_array_types(tokens: &mut Vec<TokenWithSpan>) {
+    for array in (0..tokens.len()).rev() {
+        if !is_unquoted_word(&tokens[array], "array")
+            || !is_structural_type_position(tokens, array)
+            || !postfix_array_base(tokens, array)
+        {
+            continue;
+        }
+        let source = tokens[array].clone();
+        tokens[array] = token_with_span(Token::LBracket, &source);
+        tokens.insert(array + 1, token_with_span(Token::RBracket, &source));
+    }
+}
+
+fn collect_generic_alter_metadata(tokens: &[TokenWithSpan]) -> Vec<Statement> {
+    let generic = GenericDialect {};
+    let mut metadata = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let first = next_significant(tokens, start, end);
+        let table = first.and_then(|index| next_significant(tokens, index + 1, end));
+        if first.is_some_and(|index| is_unquoted_word(&tokens[index], "alter"))
+            && table.is_some_and(|index| is_unquoted_word(&tokens[index], "table"))
+        {
+            let mut statement = tokens[start..end].to_vec();
+            let source = tokens
+                .get(end)
+                .or_else(|| tokens.get(end.saturating_sub(1)))
+                .expect("tokenized SQL always contains EOF");
+            statement.push(token_with_span(Token::EOF, source));
+            if let Ok(mut parsed) = Parser::new(&generic)
+                .with_tokens_with_locations(statement)
+                .parse_statements()
+            {
+                metadata.append(&mut parsed);
+            }
+        }
+        start = end.saturating_add(1);
+    }
+    metadata
+}
+
+fn top_level_rarrow(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth.checked_sub(1)?;
+            }
+            Token::RArrow if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn collect_custom_expression_metadata(
+    tokens: &[TokenWithSpan],
+    dialect: &dyn Dialect,
+) -> Result<Vec<Statement>, ParserError> {
+    let mut metadata = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let kind = custom_statement_kind(tokens, start, end);
+        if matches!(
+            kind,
+            Some(TrinoStatementKind::Catalog | TrinoStatementKind::Branch)
+        ) {
+            if let Some(with) = find_top_level_word(tokens, start, end, "with") {
+                let open = next_significant(tokens, with + 1, end)
+                    .ok_or_else(|| syntax_error(&tokens[with], "WITH requires properties"))?;
+                if tokens[open].token == Token::LParen {
+                    let close = matching_rparen(tokens, open)
+                        .ok_or_else(|| syntax_error(&tokens[open], "unterminated properties"))?;
+                    metadata.extend(property_expression_metadata(tokens, open, close, dialect)?);
+                }
+            }
+        }
+        if kind == Some(TrinoStatementKind::Alter) {
+            if let Some(properties) = find_top_level_word(tokens, start, end, "properties") {
+                let property_start =
+                    next_significant(tokens, properties + 1, end).ok_or_else(|| {
+                        syntax_error(&tokens[properties], "SET PROPERTIES requires assignments")
+                    })?;
+                if tokens[property_start].token != Token::LParen {
+                    for (assignment_start, assignment_end) in
+                        top_level_ranges(tokens, property_start, end)?
+                    {
+                        if let Some(statement) = property_assignment_metadata(
+                            tokens,
+                            assignment_start,
+                            assignment_end,
+                            dialect,
+                        )? {
+                            metadata.push(statement);
+                        }
+                    }
+                }
+            }
+            if let Some(execute) = find_top_level_word(tokens, start, end, "execute") {
+                let procedure = next_significant(tokens, execute + 1, end).ok_or_else(|| {
+                    syntax_error(&tokens[execute], "EXECUTE requires a procedure")
+                })?;
+                let after_procedure = consume_qualified_name(tokens, procedure, end)
+                    .ok_or_else(|| syntax_error(&tokens[procedure], "invalid procedure name"))?;
+                let mut where_start = after_procedure;
+                if let Some(open) = next_significant(tokens, after_procedure, end)
+                    .filter(|index| tokens[*index].token == Token::LParen)
+                {
+                    let close = matching_rparen(tokens, open).ok_or_else(|| {
+                        syntax_error(&tokens[open], "unterminated EXECUTE arguments")
+                    })?;
+                    if next_significant(tokens, open + 1, close).is_some() {
+                        for (argument_start, argument_end) in
+                            top_level_ranges(tokens, open + 1, close)?
+                        {
+                            let value_start =
+                                top_level_rarrow(tokens, argument_start, argument_end)
+                                    .and_then(|arrow| {
+                                        next_significant(tokens, arrow + 1, argument_end)
+                                    })
+                                    .unwrap_or(argument_start);
+                            metadata.push(parse_expression_metadata(
+                                tokens,
+                                value_start,
+                                argument_end,
+                                dialect,
+                            )?);
+                        }
+                    }
+                    where_start = close + 1;
+                }
+                if let Some(where_index) = find_top_level_word(tokens, where_start, end, "where") {
+                    let expression =
+                        next_significant(tokens, where_index + 1, end).ok_or_else(|| {
+                            syntax_error(&tokens[where_index], "WHERE requires an expression")
+                        })?;
+                    metadata.push(parse_expression_metadata(tokens, expression, end, dialect)?);
+                }
+            }
+        }
+        start = end.saturating_add(1);
+    }
+    Ok(metadata)
 }
 
 fn rewrite_type_container(
@@ -2267,29 +4043,46 @@ fn normalize_nested_row_types(tokens: &mut [TokenWithSpan]) {
 
 pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, ParserError> {
     let mut tokens = Tokenizer::new(dialect, sql).tokenize_with_location()?;
+    let custom_statement_kinds = collect_custom_statement_kinds(&tokens);
     validate_balanced_groups(&tokens)?;
     validate_trino_typed_literals(&tokens)?;
     validate_trino_table_samples(&tokens)?;
     validate_trino_create_table_forms(&tokens)?;
     validate_trino_reserved_expression_starts(&tokens)?;
     validate_trino_count_distinct_wildcard(&tokens)?;
+    let mut compatibility_metadata = normalize_create_table_extensions(&mut tokens, dialect)?;
+    compatibility_metadata.extend(normalize_analyze_properties(&mut tokens, dialect)?);
+    normalize_create_view_options(&mut tokens)?;
+    normalize_json_table_scalar_columns(&mut tokens)?;
     normalize_prepare_from(&mut tokens);
     normalize_array_parenthesis_types(&mut tokens);
     normalize_top_identifiers(&mut tokens);
+    normalize_non_reserved_projection_words(&mut tokens);
     normalize_corresponding_set_operations(&mut tokens)?;
     normalize_group_by_quantifiers(&mut tokens)?;
     normalize_empty_grouping_elements(&mut tokens);
-    normalize_pivot_group_by(&mut tokens, dialect)?;
+    compatibility_metadata.extend(normalize_pivot_group_by(&mut tokens, dialect)?);
     normalize_nearest_relations(&mut tokens, dialect)?;
     normalize_ipaddress_literals(&mut tokens);
     normalize_at_local(&mut tokens)?;
     normalize_iceberg_time_travel(&mut tokens);
+    normalize_trino_non_decimal_integer_literals(&mut tokens);
+    normalize_between_symmetry(&mut tokens);
+    normalize_trim_without_character(&mut tokens);
+    normalize_empty_lambdas(&mut tokens);
+    normalize_method_calls(&mut tokens);
+    normalize_pattern_processing_modes(&mut tokens);
+    normalize_unicode_escapes(&mut tokens)?;
     normalize_scalar_values(&mut tokens);
     normalize_typed_values(&mut tokens);
     normalize_values_expression(&mut tokens, None);
     normalize_values_expression(&mut tokens, Some("map_from_entries"));
+    compatibility_metadata.extend(normalize_quantified_values(&mut tokens, dialect)?);
     normalize_scalar_values_relations(&mut tokens, dialect)?;
-    normalize_trino_non_decimal_integer_literals(&mut tokens);
+    normalize_datetime_type_parameters(&mut tokens);
+    normalize_interval_type_precision(&mut tokens)?;
+    normalize_legacy_map_types(&mut tokens)?;
+    normalize_postfix_array_types(&mut tokens);
     validate_trino_identifiers(&tokens)?;
     normalize_iceberg_branch_references(&mut tokens, dialect);
     if let Some(token) = tokens.iter().find(|token| token.token == Token::AtSign) {
@@ -2298,6 +4091,8 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
             token.span.start.line, token.span.start.column
         )));
     }
+    compatibility_metadata.extend(collect_generic_alter_metadata(&tokens));
+    compatibility_metadata.extend(collect_custom_expression_metadata(&tokens, dialect)?);
     let parsed = Parser::new(dialect)
         .with_tokens_with_locations(tokens.clone())
         .parse_statements();
@@ -2305,22 +4100,27 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
         return Ok(ParsedSql {
             statements,
             inline_functions: Vec::new(),
-            compatibility_metadata: Vec::new(),
+            compatibility_metadata,
+            custom_statement_kinds,
         });
     }
+    normalize_table_function_copartition(&mut tokens)?;
+    compatibility_metadata.extend(normalize_table_function_arguments(&mut tokens, dialect)?);
     normalize_materialized_view_options(&mut tokens);
     normalize_match_recognize_subsets(&mut tokens);
-    normalize_with_session(&mut tokens, dialect);
+    compatibility_metadata.extend(normalize_with_session(&mut tokens, dialect)?);
     normalize_nested_row_types(&mut tokens);
     let inline_functions = normalize_inline_functions(&mut tokens, dialect)?;
     let row_expansions = normalize_row_expansions(&mut tokens, dialect)?;
+    compatibility_metadata.extend(row_expansions);
     let statements = Parser::new(dialect)
         .with_tokens_with_locations(tokens)
         .parse_statements()?;
     Ok(ParsedSql {
         statements,
         inline_functions,
-        compatibility_metadata: row_expansions,
+        compatibility_metadata,
+        custom_statement_kinds,
     })
 }
 
@@ -2371,6 +4171,31 @@ mod tests {
             parsed.inline_functions[0],
             Statement::CreateFunction(_)
         ));
+    }
+
+    #[test]
+    fn with_session_values_are_preserved_as_metadata() {
+        let dialect = TrinoDialect {};
+        let parsed = parse_sql(
+            &dialect,
+            "WITH SESSION example.setting = marh(CAST(1 AS bignum)) SELECT 1",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.compatibility_metadata.len(), 1);
+    }
+
+    #[test]
+    fn inline_compound_function_uses_structural_routine_parser() {
+        let dialect = TrinoDialect {};
+        let parsed = parse_sql(
+            &dialect,
+            "WITH FUNCTION local_f(value bigint) RETURNS bigint BEGIN DECLARE result bigint DEFAULT 1; RETURN result; END SELECT local_f(1)",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.inline_functions.len(), 1);
+        assert_eq!(parsed.statements.len(), 1);
     }
 
     #[test]
@@ -2428,8 +4253,42 @@ mod tests {
         let dialect = TrinoDialect {};
         assert!(parse_sql(&dialect, "SELECT * FROM LATERAL (VALUES 1, 2)").is_ok());
         assert!(parse_sql(&dialect, "SELECT * FROM LATERAL (VALUES )").is_err());
-        assert!(parse_sql(&dialect, "INSERT INTO target VALUES 1").is_err());
+        assert!(parse_sql(&dialect, "INSERT INTO target VALUES 1").is_ok());
         assert!(parse_sql(&dialect, "CREATE TABLE foo () AS (VALUES 1)").is_err());
         assert!(parse_sql(&dialect, "SELECT count(DISTINCT *) FROM (VALUES 1)").is_err());
+    }
+
+    #[test]
+    fn current_statement_extensions_are_structurally_normalized() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "CREATE TABLE t (c VARCHAR WITH (compression = 'LZ4'))",
+            "CREATE TABLE t (LIKE source INCLUDING PROPERTIES)",
+            "CREATE TABLE t(x, y) AS SELECT a, b FROM source WITH NO DATA",
+            "ANALYZE t WITH (sample = 10)",
+            "CREATE VIEW v COMMENT 'v' SECURITY DEFINER AS SELECT 1",
+            "SELECT ALL, SOME, ANY FROM t",
+            "SELECT * FROM JSON_TABLE(col, 'lax $' COLUMNS(name varchar FORMAT JSON PATH 'lax $.name' WITH WRAPPER KEEP QUOTES NULL ON EMPTY, regions varchar FORMAT JSON ENCODING UTF16 PATH 'lax $.regions' EMPTY ARRAY ON EMPTY EMPTY OBJECT ON ERROR) EMPTY ON ERROR)",
+        ] {
+            assert!(parse_sql(&dialect, sql).is_ok(), "expected to parse: {sql}");
+        }
+    }
+
+    #[test]
+    fn malformed_statement_extensions_are_rejected() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "CREATE TABLE t (c VARCHAR WITH ())",
+            "CREATE TABLE t (LIKE source INCLUDING)",
+            "CREATE OR REPLACE TABLE IF NOT EXISTS t AS SELECT 1",
+            "ANALYZE t WITH (sample =)",
+            "CREATE VIEW v SECURITY OWNER AS SELECT 1",
+            "SELECT * FROM JSON_TABLE(col, '$' COLUMNS(name varchar FORMAT XML PATH '$'))",
+        ] {
+            assert!(
+                parse_sql(&dialect, sql).is_err(),
+                "expected to reject: {sql}"
+            );
+        }
     }
 }

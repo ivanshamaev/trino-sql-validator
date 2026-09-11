@@ -73,7 +73,8 @@ for complete coverage.
 ### Dialects
 
 - `"trino"` (default) — Trino-flavored with a custom override tuned for
-  Presto/Trino syntax (`LIMIT ALL`, backslash escapes, etc.).
+  current Trino syntax, including Iceberg branches/time travel, complex nested
+  types, routines, table functions, SQL/JSON, and Trino-specific DDL.
 - `"hive"` and `"generic"` — offered as permissive alternates.
 
 ## Known limitations
@@ -86,6 +87,12 @@ including nested `ROW`/`ARRAY`/`MAP` types, but it does not replace Trino's
 semantic analyzer. For the overwhelming majority of SELECT/DDL statements the
 results are accurate. See [`plan/roadmap.md`](plan/roadmap.md) for the path toward
 stricter Trino fidelity.
+
+Parser fidelity is checked reproducibly against direct-string cases extracted
+from Apache Trino's parser tests. The pinned Trino 483 gate currently accepts
+456/456 extracted statements and 68/68 extracted types, and rejects 23/23
+direct negative statements. These figures describe the extractable syntax
+subset, not the full Trino semantic analyzer or connector runtime behavior.
 
 ## Development
 
