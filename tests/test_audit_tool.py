@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -54,15 +55,43 @@ def test_standalone_function_specification_has_an_executable_wrapper() -> None:
     assert result["mismatches"] == []
 
 
-def test_local_source_metadata_uses_actual_git_revision_and_hash() -> None:
-    source = audit.UpstreamSource("trinodb/trino", "ignored-local-ref", ROOT)
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=audit-test",
+            "-c",
+            "user.email=audit-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-C",
+            str(root),
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_local_source_metadata_uses_actual_git_revision_and_hash(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "Test.java").write_text("SELECT 1", encoding="utf-8")
+    _git(tmp_path, "add", "Test.java")
+    _git(tmp_path, "commit", "-q", "-m", "fixture")
+    source = audit.UpstreamSource("trinodb/trino", "ignored-local-ref", tmp_path)
 
     metadata = source.metadata({"parser": "SELECT 1"})
 
-    assert len(metadata["revision"]) == 40
+    assert metadata["revision"] == _git(tmp_path, "rev-parse", "HEAD")
     assert metadata["revision"] != "ignored-local-ref"
-    assert metadata["dirty"] is True
+    assert metadata["dirty"] is False
     assert metadata["content_sha256"]["parser"] == hashlib.sha256(b"SELECT 1").hexdigest()
+
+    (tmp_path / "Test.java").write_text("SELECT 2", encoding="utf-8")
+
+    assert source.metadata({"parser": "SELECT 2"})["dirty"] is True
 
 
 def test_baseline_gate_detects_new_mismatch_and_missing_cases() -> None:
