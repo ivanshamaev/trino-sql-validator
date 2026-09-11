@@ -1,6 +1,6 @@
 use sqlparser::ast::{
     CreateFunction, CreateFunctionBody, Expr, FunctionCalledOnNull, FunctionDeterminismSpecifier,
-    FunctionReturnType, FunctionSecurity, OperateFunctionArg, Statement, Value,
+    FunctionReturnType, FunctionSecurity, OperateFunctionArg, Statement, UnaryOperator, Value,
 };
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
@@ -1132,7 +1132,12 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
             ));
         }
     } else if opt_kw(p, Keyword::EXECUTE) {
-        p.parse_object_name(true)?;
+        if if_exists {
+            return Err(ParserError::ParserError(
+                "ALTER TABLE EXECUTE does not support IF EXISTS".into(),
+            ));
+        }
+        p.parse_identifier()?;
         parse_optional_execute_arguments(p)?;
         if opt_kw(p, Keyword::WHERE) {
             p.parse_expr()?;
@@ -1148,7 +1153,7 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
 
 fn parse_column_options(p: &mut Parser) -> Result<(), ParserError> {
     if consume_word(p, "default") {
-        p.parse_expr()?;
+        parse_trino_literal(p)?;
     }
     if opt_kw(p, Keyword::NOT) {
         p.expect_keyword(Keyword::NULL)?;
@@ -1168,7 +1173,7 @@ fn parse_alter_column_action(p: &mut Parser) -> Result<(), ParserError> {
             p.expect_keyword(Keyword::TYPE)?;
             p.parse_data_type()?;
         } else if consume_word(p, "default") {
-            p.parse_expr()?;
+            parse_trino_literal(p)?;
         } else {
             return Err(ParserError::ParserError(
                 "unsupported ALTER COLUMN ... SET form".into(),
@@ -1183,6 +1188,26 @@ fn parse_alter_column_action(p: &mut Parser) -> Result<(), ParserError> {
         return Err(ParserError::ParserError(
             "unsupported ALTER COLUMN form".into(),
         ));
+    }
+    Ok(())
+}
+
+fn parse_trino_literal(p: &mut Parser) -> Result<(), ParserError> {
+    let location = p.peek_token_ref().span.start;
+    let expression = p.parse_expr()?;
+    let is_literal = match expression {
+        Expr::Value(_) | Expr::TypedString(_) | Expr::Interval(_) => true,
+        Expr::UnaryOp {
+            op: UnaryOperator::Plus | UnaryOperator::Minus,
+            expr,
+        } => matches!(*expr, Expr::Value(value) if matches!(value.value, Value::Number(_, _))),
+        _ => false,
+    };
+    if !is_literal {
+        return Err(ParserError::ParserError(format!(
+            "Trino column DEFAULT requires a literal at Line: {}, Column: {}",
+            location.line, location.column
+        )));
     }
     Ok(())
 }
@@ -1512,7 +1537,7 @@ mod tests {
             "ALTER TABLE t SET AUTHORIZATION ROLE role1",
             "ALTER TABLE t SET AUTHORIZATION USER user1",
             "ALTER TABLE t EXECUTE optimize",
-            "ALTER TABLE t EXECUTE optimize (file_size_threshold = '16MB')",
+            "ALTER TABLE t EXECUTE optimize (file_size_threshold => '16MB')",
             "ALTER TABLE IF EXISTS t RENAME TO t2",
             "ALTER TABLE t RENAME COLUMN IF EXISTS payload.old_name TO new_name",
             "ALTER TABLE t ADD COLUMN IF NOT EXISTS payload.item bigint LAST",
@@ -1586,6 +1611,8 @@ mod tests {
             "ALTER VIEW t SET PROPERTIES x = 1",
             "ALTER BRANCH b SET",
             "ALTER TABLE t EXECUTE",
+            "ALTER TABLE t EXECUTE system.optimize()",
+            "ALTER TABLE IF EXISTS t EXECUTE optimize",
             "ALTER TABLE t RENAME COLUMN payload.item new_name",
             "ALTER TABLE t ADD COLUMN IF EXISTS payload.item bigint",
             "ALTER TABLE t ADD COLUMN payload.item bigint AFTER",

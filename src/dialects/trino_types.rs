@@ -1,6 +1,10 @@
+use core::ops::ControlFlow;
 use std::cmp::Reverse;
 
-use sqlparser::ast::Statement;
+use sqlparser::ast::{BinaryOperator, ColumnOption, FunctionArg};
+use sqlparser::ast::{Expr, FunctionArgExpr, FunctionArgOperator, FunctionArguments, Ident};
+use sqlparser::ast::{LimitClause, Query, Select, Statement, TableFactor, UnaryOperator};
+use sqlparser::ast::{Value, Visit, Visitor};
 use sqlparser::dialect::{Dialect, GenericDialect};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
@@ -10,9 +14,10 @@ use crate::types;
 
 pub(crate) struct ParsedSql {
     pub(crate) statements: Vec<Statement>,
-    pub(crate) inline_functions: Vec<Statement>,
+    pub(crate) inline_functions: Vec<(usize, Statement)>,
     pub(crate) compatibility_metadata: Vec<Statement>,
     pub(crate) custom_statement_kinds: Vec<TrinoStatementKind>,
+    pub(crate) source_type_names: Vec<Ident>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2437,7 +2442,7 @@ fn normalize_iceberg_time_travel(tokens: &mut [TokenWithSpan]) {
         let Some(of) = next_significant(tokens, as_index + 1, tokens.len()) else {
             continue;
         };
-        let Some(value) = next_significant(tokens, of + 1, tokens.len()) else {
+        let Some(_value) = next_significant(tokens, of + 1, tokens.len()) else {
             continue;
         };
         if !is_unquoted_word(&tokens[as_index], "as") || !is_unquoted_word(&tokens[of], "of") {
@@ -2445,16 +2450,9 @@ fn normalize_iceberg_time_travel(tokens: &mut [TokenWithSpan]) {
         }
         if is_unquoted_word(&tokens[kind], "timestamp") {
             tokens[for_index].token = Token::Whitespace(Whitespace::Space);
-        } else if is_unquoted_word(&tokens[kind], "version")
-            && matches!(
-                tokens[value].token,
-                Token::Number(_, _) | Token::SingleQuotedString(_)
-            )
-        {
+        } else if is_unquoted_word(&tokens[kind], "version") {
             tokens[for_index].token = Token::Whitespace(Whitespace::Space);
-            if matches!(tokens[value].token, Token::SingleQuotedString(_)) {
-                tokens[value].token = Token::Number("0".to_string(), false);
-            }
+            replace_word(&mut tokens[kind], "TIMESTAMP", Keyword::TIMESTAMP);
         }
     }
 }
@@ -2915,6 +2913,31 @@ fn is_inline_function_query_start(tokens: &[TokenWithSpan], index: usize, end: u
     })
 }
 
+fn find_top_level_query_prefix(
+    tokens: &[TokenWithSpan],
+    start: usize,
+    end: usize,
+    prefix: &str,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for index in start..end {
+        match tokens[index].token {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth.saturating_sub(1);
+            }
+            _ if depth == 0 && is_unquoted_word(&tokens[index], "with") => {
+                let next = next_significant(tokens, index + 1, end)?;
+                if is_unquoted_word(&tokens[next], prefix) {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_inline_function_declaration(
     tokens: &[TokenWithSpan],
     function: usize,
@@ -2985,32 +3008,27 @@ fn parse_inline_function(
 fn normalize_inline_functions(
     tokens: &mut [TokenWithSpan],
     dialect: &dyn Dialect,
-) -> Result<Vec<Statement>, ParserError> {
+) -> Result<Vec<(usize, Statement)>, ParserError> {
     let mut declarations = Vec::new();
     let mut start = 0usize;
+    let mut statement_index = 0usize;
     while start < tokens.len() {
         let ordinary_end = statement_end(tokens, start);
-        let Some(with) = next_significant(tokens, start, ordinary_end) else {
+        let Some(with) = find_top_level_query_prefix(tokens, start, ordinary_end, "function")
+        else {
+            start = ordinary_end.saturating_add(1);
+            statement_index += 1;
+            continue;
+        };
+        let Some(mut function) = next_significant(tokens, with + 1, tokens.len()) else {
             break;
         };
-        if !is_unquoted_word(&tokens[with], "with") {
-            start = ordinary_end.saturating_add(1);
-            continue;
-        }
-        let Some(mut function) = next_significant(tokens, with + 1, tokens.len()) else {
-            start = ordinary_end.saturating_add(1);
-            continue;
-        };
-        if !is_unquoted_word(&tokens[function], "function") {
-            start = ordinary_end.saturating_add(1);
-            continue;
-        }
         let end = tokens.len();
 
         let query_start = loop {
             let (boundary, declaration) =
                 parse_inline_function_declaration(tokens, function, end, dialect)?;
-            declarations.push(declaration);
+            declarations.push((statement_index, declaration));
             if tokens[boundary].token == Token::Comma {
                 let Some(next_function) = next_significant(tokens, boundary + 1, end) else {
                     return Err(syntax_error(
@@ -3031,6 +3049,7 @@ fn normalize_inline_functions(
             break boundary;
         };
         start = statement_end(tokens, query_start).saturating_add(1);
+        statement_index += 1;
     }
     Ok(declarations)
 }
@@ -3145,7 +3164,10 @@ fn normalize_with_session(
     let mut start = 0usize;
     while start < tokens.len() {
         let end = statement_end(tokens, start);
-        if let Some((query_start, values)) = with_session_query_start(tokens, start, end, dialect) {
+        let prefix = find_top_level_query_prefix(tokens, start, end, "session");
+        if let Some((query_start, values)) =
+            prefix.and_then(|with| with_session_query_start(tokens, with, end, dialect))
+        {
             for (value_start, value_end) in values {
                 metadata.push(parse_expression_metadata(
                     tokens,
@@ -3154,7 +3176,8 @@ fn normalize_with_session(
                     dialect,
                 )?);
             }
-            blank_non_whitespace(tokens, start, query_start);
+            let with = prefix.expect("matched WITH SESSION prefix");
+            blank_non_whitespace(tokens, with, query_start);
         }
         start = end.saturating_add(1);
     }
@@ -3552,14 +3575,13 @@ fn validate_trino_identifiers(tokens: &[TokenWithSpan]) -> Result<(), ParserErro
 
 fn is_in_create_type_declaration(tokens: &[TokenWithSpan], index: usize) -> bool {
     let start = statement_start(tokens, index);
-    let Some(first) = next_significant(tokens, start, index) else {
+    let Some(create) = (start..index)
+        .rev()
+        .find(|current| unquoted_keyword(&tokens[*current]) == Some(Keyword::CREATE))
+    else {
         return false;
     };
-    if unquoted_keyword(&tokens[first]) != Some(Keyword::CREATE) {
-        return false;
-    }
-
-    let mut cursor = first + 1;
+    let mut cursor = create + 1;
     let declaration = loop {
         let Some(current) = next_significant(tokens, cursor, index) else {
             return false;
@@ -3574,6 +3596,62 @@ fn is_in_create_type_declaration(tokens: &[TokenWithSpan], index: usize) -> bool
     };
     let Some(open) =
         (declaration + 1..index).find(|current| tokens[*current].token == Token::LParen)
+    else {
+        return false;
+    };
+    matching_rparen(tokens, open).is_some_and(|close| close > index)
+}
+
+fn is_routine_return_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
+    let start = statement_start(tokens, index);
+    let Some(returns) = (start..index)
+        .rev()
+        .find(|current| unquoted_keyword(&tokens[*current]) == Some(Keyword::RETURNS))
+    else {
+        return false;
+    };
+    let mut depth = 0usize;
+    for token in tokens.iter().take(index).skip(returns + 1) {
+        match token.token {
+            Token::LParen | Token::LBracket | Token::Lt => depth += 1,
+            Token::RParen | Token::RBracket | Token::Gt if depth > 0 => depth -= 1,
+            _ if depth == 0
+                && [
+                    "as",
+                    "begin",
+                    "called",
+                    "comment",
+                    "deterministic",
+                    "language",
+                    "not",
+                    "return",
+                    "security",
+                ]
+                .iter()
+                .any(|word| is_unquoted_word(token, word)) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+fn is_drop_function_signature_position(tokens: &[TokenWithSpan], index: usize) -> bool {
+    let start = statement_start(tokens, index);
+    let Some(drop) = next_significant(tokens, start, index) else {
+        return false;
+    };
+    let Some(function) = next_significant(tokens, drop + 1, index) else {
+        return false;
+    };
+    if unquoted_keyword(&tokens[drop]) != Some(Keyword::DROP)
+        || unquoted_keyword(&tokens[function]) != Some(Keyword::FUNCTION)
+    {
+        return false;
+    }
+    let Some(open) = (function + 1..index).find(|current| tokens[*current].token == Token::LParen)
     else {
         return false;
     };
@@ -3616,7 +3694,11 @@ fn is_cast_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
 }
 
 fn is_structural_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
-    if is_type_context(tokens, index) || is_cast_type_position(tokens, index) {
+    if is_type_context(tokens, index)
+        || is_cast_type_position(tokens, index)
+        || is_routine_return_type_position(tokens, index)
+        || is_drop_function_signature_position(tokens, index)
+    {
         return true;
     }
     enclosing_parentheses(tokens, index)
@@ -3628,6 +3710,257 @@ fn is_structural_type_position(tokens: &[TokenWithSpan], index: usize) -> bool {
                 || is_unquoted_word(&tokens[container], "struct"))
                 && (is_type_context(tokens, container) || is_cast_type_position(tokens, container))
         })
+}
+
+fn source_type_ident(token: &TokenWithSpan) -> Option<Ident> {
+    let Token::Word(word) = &token.token else {
+        return None;
+    };
+    Some(match word.quote_style {
+        Some(quote) => Ident::with_quote_and_span(quote, token.span, word.value.clone()),
+        None => Ident::with_span(token.span, word.value.clone()),
+    })
+}
+
+fn alter_type_starts(tokens: &[TokenWithSpan]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    for index in 0..tokens.len() {
+        if is_unquoted_word(&tokens[index], "add") {
+            let statement = statement_start(tokens, index);
+            if !(statement..index).any(|candidate| is_unquoted_word(&tokens[candidate], "alter")) {
+                continue;
+            }
+            let Some(column) = next_significant(tokens, index + 1, tokens.len()) else {
+                continue;
+            };
+            if !is_unquoted_word(&tokens[column], "column") {
+                continue;
+            }
+            let mut name = next_significant(tokens, column + 1, tokens.len());
+            if name.is_some_and(|current| is_unquoted_word(&tokens[current], "if")) {
+                name = name
+                    .and_then(|current| next_significant(tokens, current + 1, tokens.len()))
+                    .and_then(|current| next_significant(tokens, current + 1, tokens.len()))
+                    .and_then(|current| next_significant(tokens, current + 1, tokens.len()));
+            }
+            if let Some(type_start) = name
+                .and_then(|name| consume_qualified_name(tokens, name, tokens.len()))
+                .and_then(|after| next_significant(tokens, after, tokens.len()))
+            {
+                starts.push(type_start);
+            }
+        }
+        if is_unquoted_word(&tokens[index], "type") {
+            let previous = previous_significant(tokens, index);
+            let before_previous = previous.and_then(|value| previous_significant(tokens, value));
+            if previous.is_some_and(|value| is_unquoted_word(&tokens[value], "data"))
+                && before_previous.is_some_and(|value| is_unquoted_word(&tokens[value], "set"))
+            {
+                if let Some(type_start) = next_significant(tokens, index + 1, tokens.len()) {
+                    starts.push(type_start);
+                }
+            }
+        }
+    }
+    starts
+}
+
+fn collect_source_type_names(tokens: &[TokenWithSpan]) -> Vec<Ident> {
+    let alter_starts = alter_type_starts(tokens);
+    let mut names = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let Token::Word(word) = &token.token else {
+            continue;
+        };
+        let lower = word.value.to_ascii_lowercase();
+        if types::is_known_type(&lower) {
+            continue;
+        }
+        let previous = previous_significant(tokens, index);
+        let next = next_significant(tokens, index + 1, tokens.len());
+        let explicit_marker = previous.is_some_and(|previous| {
+            is_unquoted_word(&tokens[previous], "returning")
+                || (is_unquoted_word(&tokens[previous], "returns")
+                    && !(is_unquoted_word(token, "null")
+                        && next.is_some_and(|next| is_unquoted_word(&tokens[next], "on"))))
+        });
+        let typed_literal = word.keyword == Keyword::NoKeyword
+            && next.is_some_and(|next| is_single_quoted_string(&tokens[next]));
+        let foreign_builtin = matches!(lower.as_str(), "int64" | "string" | "bytea")
+            && is_structural_type_position(tokens, index)
+            && !previous.is_some_and(|previous| is_unquoted_word(&tokens[previous], "default"))
+            && !next.is_some_and(|next| is_probable_type_name(&tokens[next]));
+        if explicit_marker || typed_literal || foreign_builtin || alter_starts.contains(&index) {
+            if let Some(ident) = source_type_ident(token) {
+                names.push(ident);
+            }
+        }
+    }
+    names
+}
+
+fn is_trino_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(_) | Expr::TypedString(_) | Expr::Interval(_) => true,
+        Expr::UnaryOp {
+            op: UnaryOperator::Plus | UnaryOperator::Minus,
+            expr,
+        } => {
+            matches!(expr.as_ref(), Expr::Value(value) if matches!(value.value, Value::Number(_, _)))
+        }
+        _ => false,
+    }
+}
+
+fn is_trino_row_count(expr: &Expr) -> bool {
+    matches!(expr, Expr::Value(value) if match &value.value {
+        Value::Placeholder(value) => value == "?",
+        Value::Number(value, _) => !value.contains(['.', 'e', 'E']),
+        _ => false,
+    })
+}
+
+fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
+    let mut error = None;
+    struct GrammarVisitor<'a> {
+        error: &'a mut Option<ParserError>,
+    }
+    impl GrammarVisitor<'_> {
+        fn reject(&mut self, message: &str) -> ControlFlow<()> {
+            *self.error = Some(ParserError::ParserError(message.to_string()));
+            ControlFlow::Break(())
+        }
+    }
+    impl Visitor for GrammarVisitor<'_> {
+        type Break = ();
+
+        fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
+            match statement {
+                Statement::Call(function) => {
+                    let valid_argument = |argument: &FunctionArg| match argument {
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(_)) => true,
+                        FunctionArg::Named { arg, operator, .. } => {
+                            matches!(arg, FunctionArgExpr::Expr(_))
+                                && *operator == FunctionArgOperator::RightArrow
+                        }
+                        _ => false,
+                    };
+                    let valid_list = match &function.args {
+                        FunctionArguments::List(arguments) => {
+                            arguments.duplicate_treatment.is_none()
+                                && arguments.clauses.is_empty()
+                                && arguments.args.iter().all(valid_argument)
+                        }
+                        _ => false,
+                    };
+                    if !matches!(function.parameters, FunctionArguments::None)
+                        || !valid_list
+                        || function.filter.is_some()
+                        || function.null_treatment.is_some()
+                        || function.over.is_some()
+                        || !function.within_group.is_empty()
+                    {
+                        return self.reject("invalid Trino CALL syntax");
+                    }
+                }
+                Statement::CreateIndex(_) => {
+                    return self.reject("CREATE INDEX is not supported by Trino");
+                }
+                Statement::Update(update) => {
+                    if update.from.is_some() || update.returning.is_some() {
+                        return self.reject("invalid Trino UPDATE syntax");
+                    }
+                }
+                Statement::Delete(delete) => {
+                    if delete.using.is_some() || delete.returning.is_some() {
+                        return self.reject("invalid Trino DELETE syntax");
+                    }
+                }
+                Statement::Insert(insert) => {
+                    if insert.returning.is_some() {
+                        return self.reject("INSERT RETURNING is not supported by Trino");
+                    }
+                }
+                Statement::CreateTable(create) => {
+                    for column in &create.columns {
+                        for option in &column.options {
+                            if let ColumnOption::Default(expr) = &option.option {
+                                if !is_trino_literal(expr) {
+                                    return self.reject("Trino column DEFAULT requires a literal");
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+            if let Some(limit_clause) = &query.limit_clause {
+                let valid = match limit_clause {
+                    LimitClause::LimitOffset {
+                        limit,
+                        offset,
+                        limit_by,
+                    } => {
+                        limit_by.is_empty()
+                            && limit.as_ref().map_or(true, is_trino_row_count)
+                            && offset
+                                .as_ref()
+                                .map_or(true, |offset| is_trino_row_count(&offset.value))
+                    }
+                    LimitClause::OffsetCommaLimit { .. } => false,
+                };
+                if !valid {
+                    return self.reject("Trino LIMIT/OFFSET requires an integer or ?");
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_select(&mut self, select: &Select) -> ControlFlow<Self::Break> {
+            if select.qualify.is_some() {
+                return self.reject("QUALIFY is not supported by Trino");
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            if matches!(expr, Expr::ILike { .. })
+                || matches!(
+                    expr,
+                    Expr::BinaryOp {
+                        op: BinaryOperator::Spaceship,
+                        ..
+                    }
+                )
+            {
+                return self.reject("operator is not supported by Trino");
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_table_factor(
+            &mut self,
+            table_factor: &TableFactor,
+        ) -> ControlFlow<Self::Break> {
+            if matches!(table_factor, TableFactor::Table { args: Some(_), .. })
+                || matches!(table_factor, TableFactor::Function { .. })
+            {
+                return self.reject("named table functions require TABLE(...) in Trino");
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut visitor = GrammarVisitor { error: &mut error };
+    let _ = statements.to_vec().visit(&mut visitor);
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn normalize_datetime_type_parameters(tokens: &mut [TokenWithSpan]) {
@@ -3794,7 +4127,7 @@ fn postfix_array_base(tokens: &[TokenWithSpan], array: usize) -> bool {
         return false;
     };
     match tokens[previous].token {
-        Token::Word(_) => is_known_type_name(&tokens[previous]),
+        Token::Word(_) => is_probable_type_name(&tokens[previous]),
         Token::RParen => matching_lparen(tokens, previous)
             .and_then(|open| previous_significant(tokens, open))
             .is_some_and(|word| is_probable_type_name(&tokens[word])),
@@ -3803,11 +4136,35 @@ fn postfix_array_base(tokens: &[TokenWithSpan], array: usize) -> bool {
     }
 }
 
+fn postfix_array_base_is_declaration_name(tokens: &[TokenWithSpan], array: usize) -> bool {
+    let Some(base) = previous_significant(tokens, array) else {
+        return false;
+    };
+    let Some(before_base) = previous_significant(tokens, base) else {
+        return false;
+    };
+    if !matches!(tokens[before_base].token, Token::LParen | Token::Comma) {
+        return false;
+    }
+    let Some(open) = enclosing_parentheses(tokens, array).last().copied() else {
+        return false;
+    };
+    if is_drop_function_signature_position(tokens, array) {
+        return false;
+    }
+    let container = previous_significant(tokens, open);
+    !container.is_some_and(|container| is_unquoted_word(&tokens[container], "row"))
+        && is_in_create_type_declaration(tokens, array)
+}
+
 fn normalize_postfix_array_types(tokens: &mut Vec<TokenWithSpan>) {
     for array in (0..tokens.len()).rev() {
+        let next = next_significant(tokens, array + 1, tokens.len());
         if !is_unquoted_word(&tokens[array], "array")
             || !is_structural_type_position(tokens, array)
             || !postfix_array_base(tokens, array)
+            || postfix_array_base_is_declaration_name(tokens, array)
+            || next.is_some_and(|next| matches!(tokens[next].token, Token::LParen | Token::Lt))
         {
             continue;
         }
@@ -3884,8 +4241,8 @@ fn collect_custom_expression_metadata(
                 }
             }
         }
-        if kind == Some(TrinoStatementKind::Alter) {
-            if let Some(properties) = find_top_level_word(tokens, start, end, "properties") {
+        if let Some(alter) = find_top_level_word(tokens, start, end, "alter") {
+            if let Some(properties) = find_top_level_word(tokens, alter, end, "properties") {
                 let property_start =
                     next_significant(tokens, properties + 1, end).ok_or_else(|| {
                         syntax_error(&tokens[properties], "SET PROPERTIES requires assignments")
@@ -3905,7 +4262,22 @@ fn collect_custom_expression_metadata(
                     }
                 }
             }
-            if let Some(execute) = find_top_level_word(tokens, start, end, "execute") {
+            if let Some(with) = find_top_level_word(tokens, alter, end, "with") {
+                let has_add_column = find_top_level_word(tokens, alter, with, "add").is_some()
+                    && find_top_level_word(tokens, alter, with, "column").is_some();
+                if has_add_column {
+                    if let Some(open) = next_significant(tokens, with + 1, end)
+                        .filter(|index| tokens[*index].token == Token::LParen)
+                    {
+                        let close = matching_rparen(tokens, open).ok_or_else(|| {
+                            syntax_error(&tokens[open], "unterminated properties")
+                        })?;
+                        metadata
+                            .extend(property_expression_metadata(tokens, open, close, dialect)?);
+                    }
+                }
+            }
+            if let Some(execute) = find_top_level_word(tokens, alter, end, "execute") {
                 let procedure = next_significant(tokens, execute + 1, end).ok_or_else(|| {
                     syntax_error(&tokens[execute], "EXECUTE requires a procedure")
                 })?;
@@ -4044,6 +4416,7 @@ fn normalize_nested_row_types(tokens: &mut [TokenWithSpan]) {
 pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, ParserError> {
     let mut tokens = Tokenizer::new(dialect, sql).tokenize_with_location()?;
     let custom_statement_kinds = collect_custom_statement_kinds(&tokens);
+    let source_type_names = collect_source_type_names(&tokens);
     validate_balanced_groups(&tokens)?;
     validate_trino_typed_literals(&tokens)?;
     validate_trino_table_samples(&tokens)?;
@@ -4055,6 +4428,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_create_view_options(&mut tokens)?;
     normalize_json_table_scalar_columns(&mut tokens)?;
     normalize_prepare_from(&mut tokens);
+    normalize_nested_row_types(&mut tokens);
     normalize_array_parenthesis_types(&mut tokens);
     normalize_top_identifiers(&mut tokens);
     normalize_non_reserved_projection_words(&mut tokens);
@@ -4097,11 +4471,13 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
         .with_tokens_with_locations(tokens.clone())
         .parse_statements();
     if let Ok(statements) = parsed {
+        validate_trino_ast(&statements)?;
         return Ok(ParsedSql {
             statements,
             inline_functions: Vec::new(),
             compatibility_metadata,
             custom_statement_kinds,
+            source_type_names,
         });
     }
     normalize_table_function_copartition(&mut tokens)?;
@@ -4109,18 +4485,19 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_materialized_view_options(&mut tokens);
     normalize_match_recognize_subsets(&mut tokens);
     compatibility_metadata.extend(normalize_with_session(&mut tokens, dialect)?);
-    normalize_nested_row_types(&mut tokens);
     let inline_functions = normalize_inline_functions(&mut tokens, dialect)?;
     let row_expansions = normalize_row_expansions(&mut tokens, dialect)?;
     compatibility_metadata.extend(row_expansions);
     let statements = Parser::new(dialect)
         .with_tokens_with_locations(tokens)
         .parse_statements()?;
+    validate_trino_ast(&statements)?;
     Ok(ParsedSql {
         statements,
         inline_functions,
         compatibility_metadata,
         custom_statement_kinds,
+        source_type_names,
     })
 }
 
@@ -4168,7 +4545,7 @@ mod tests {
         assert_eq!(parsed.inline_functions.len(), 1);
         assert!(parsed.compatibility_metadata.is_empty());
         assert!(matches!(
-            parsed.inline_functions[0],
+            parsed.inline_functions[0].1,
             Statement::CreateFunction(_)
         ));
     }

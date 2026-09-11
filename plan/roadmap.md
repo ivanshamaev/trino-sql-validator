@@ -98,13 +98,34 @@
   passes all 458 extracted statement cases. PrestoDB
   0.299 remains a non-target comparison corpus.
 
-## Next — clearer Trino cursor
-- Cover connector `CALL` signatures structurally without claiming semantic argument
-  validation.
-- Surface statement *type* (SELECT/DDL/...) from the parsed AST to the Python
-  result (currently we only count statements and validate the file-level
-  outcome); this unlocks an `allow_ddl=False` flag and per-statement error
-  indexes.
+## v0.14.0 — safety, parser boundaries, metadata, and reproducible gates
+- Added bounded token/statement/nesting complexity checks before parser or AST
+  recursion, including subprocess crash regressions.
+- Completed warning discovery in nested structural types, SQL/JSON, routines,
+  wrapped/custom statements, CALL/EXECUTE expressions, and Iceberg time-travel
+  expressions while preserving source coordinates and query-local function scope.
+- Enforced Trino-specific CALL, ALTER EXECUTE, LIMIT/OFFSET, DML, relation,
+  DEFAULT, operator, and clause boundaries without changing generic/hive behavior.
+- Added full `FOR VERSION AS OF <valueExpression>` and consistent postfix-array
+  types in CAST, columns, ALTER, PREPARE, and function signatures.
+- Pinned reproducible function/type catalogs to Trino 483 with resolved SHA and
+  file checksums; added Geometry, SphericalGeography, and BingTile.
+- Expanded the upstream audit to Java text blocks and Functions/Routines, with
+  source provenance, a named fail-on-regression baseline, and a separate GitHub
+  workflow. All 276 positive fixture statements and the 57-case query composition
+  matrix are independently checked.
+- Added opt-in `analyze_statements()` with source spans, source-derived kinds,
+  wrapper inner kinds, and an error-statement index. Existing validation results
+  remain unchanged.
+
+Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
+
+## Next
+- Define any policy API such as `allow_ddl=False` separately from syntax validity;
+  it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.
+- Work through the named Trino 483 text-block mismatches now exposed by the
+  expanded audit (CTAS option ordering, advanced SQL/JSON and row-pattern windows,
+  and table-function edge cases) without loosening the Trino dialect.
 
 ## Later ideation
 - **Trino-exact grammar:** bundle/port Trino's own `trino-parser` (ANTLR4) grammar

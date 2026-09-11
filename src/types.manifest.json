@@ -1,0 +1,14 @@
+{
+  "entry_count": 39,
+  "files": {
+    "docs/src/main/sphinx/functions/geospatial.md": "9fe1bc3fae293af41cf132493d44aa287219673ee3c7e42899f5ff38b2e51616",
+    "docs/src/main/sphinx/language/types.md": "9d1fdba1d480686b7a603b4fca0949255847f0f7948769d472c164a09232df71"
+  },
+  "generator": "tools/extract_types.py",
+  "source": {
+    "mode": "remote",
+    "repository": "https://github.com/trinodb/trino",
+    "requested_ref": "483",
+    "resolved_sha": "50b0b50b75abd47f830b7805ee1b51716eb4065e"
+  }
+}

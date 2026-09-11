@@ -1,0 +1,54 @@
+name: Upstream parser audit
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      report-master-drift:
+        description: Also compare against the current Trino master branch
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-trino-483:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install package and development dependencies
+        run: pip install -e ".[dev]"
+      - name: Check pinned Trino parser baseline
+        run: >-
+          python tools/audit_upstream_parsers.py
+          --trino-ref 483
+          --presto-ref 0.299
+          --baseline plan/trino_483_audit_baseline.json
+          --fail-on-regression
+
+  trino-master-drift:
+    if: github.event_name == 'workflow_dispatch' && inputs.report-master-drift
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install package and development dependencies
+        run: pip install -e ".[dev]"
+      - name: Report Trino master drift
+        run: >-
+          python tools/audit_upstream_parsers.py
+          --trino-ref master
+          --presto-ref 0.299

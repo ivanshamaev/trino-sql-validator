@@ -1,8 +1,9 @@
 use core::ops::ControlFlow;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use sqlparser::ast::visit_expressions;
+use sqlparser::ast::{visit_expressions, FunctionArgumentClause, FunctionArguments};
 use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, Statement};
+use sqlparser::ast::{JsonTableColumn, TableFactor, Visit, Visitor};
 use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
@@ -10,7 +11,7 @@ use std::sync::LazyLock;
 
 use crate::dialects::{parse_trino_sql, SqlDialect};
 use sqlparser::parser::{Parser, ParserError};
-use sqlparser::tokenizer::{Token, Tokenizer};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 pub mod dialects;
 pub mod functions;
@@ -30,39 +31,135 @@ type ValidationResultTuple = (
     Vec<(String, String, Option<usize>, Option<usize>)>,
 );
 
+type StatementInfoTuple = (usize, usize, usize, usize, usize, String, Option<String>);
+
+type StatementAnalysisTuple = (
+    ValidationResultTuple,
+    Vec<StatementInfoTuple>,
+    Option<usize>,
+);
+
 static LOCATION_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"at Line: (\d+), Column: (\d+)").unwrap());
 
 static LOCATION_SUFFIX_PATTERN: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+at Line: \d+, Column: \d+$").unwrap());
 
-fn has_empty_from_clause(sql: &str, dialect: &dyn sqlparser::dialect::Dialect) -> bool {
-    let mut tokenizer = Tokenizer::new(dialect, sql);
-    let Ok(tokens) = tokenizer.tokenize() else {
-        return false;
+const MAX_SQL_TOKENS: usize = 65_536;
+const MAX_STATEMENT_TOKENS: usize = 4_096;
+const MAX_NESTING_DEPTH: usize = 256;
+
+fn complexity_error(message: &str, token: &TokenWithSpan) -> ValidationResultTuple {
+    (
+        false,
+        0,
+        Some(format!("sql parser error: {message}")),
+        Some(token.span.start.line as usize),
+        Some(token.span.start.column as usize),
+        Vec::new(),
+    )
+}
+
+fn validate_input_complexity(
+    sql: &str,
+    dialect: &dyn sqlparser::dialect::Dialect,
+) -> Option<ValidationResultTuple> {
+    let Ok(tokens) = Tokenizer::new(dialect, sql).tokenize_with_location() else {
+        return None;
     };
-    let significant: Vec<&Token> = tokens
+    let mut total_tokens = 0;
+    let mut statement_tokens = 0;
+    let mut group_depth = 0;
+    let mut compound_depth = 0;
+    for token in &tokens {
+        if matches!(token.token, Token::Whitespace(_)) {
+            continue;
+        }
+        total_tokens += 1;
+        statement_tokens += 1;
+        if total_tokens > MAX_SQL_TOKENS {
+            return Some(complexity_error(
+                "maximum SQL input complexity exceeded",
+                token,
+            ));
+        }
+        if statement_tokens > MAX_STATEMENT_TOKENS {
+            return Some(complexity_error(
+                "maximum SQL statement complexity exceeded",
+                token,
+            ));
+        }
+        match &token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => {
+                group_depth += 1;
+                if group_depth > MAX_NESTING_DEPTH {
+                    return Some(complexity_error("maximum nesting depth exceeded", token));
+                }
+            }
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                group_depth = group_depth.saturating_sub(1);
+            }
+            Token::Word(word) if word.quote_style.is_none() => {
+                if word.value.eq_ignore_ascii_case("BEGIN") {
+                    compound_depth += 1;
+                    if compound_depth > MAX_NESTING_DEPTH {
+                        return Some(complexity_error("maximum nesting depth exceeded", token));
+                    }
+                } else if word.value.eq_ignore_ascii_case("END") {
+                    compound_depth = compound_depth.saturating_sub(1);
+                }
+            }
+            Token::SemiColon if compound_depth == 0 && group_depth == 0 => {
+                statement_tokens = 0;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn empty_from_clause_location(
+    sql: &str,
+    dialect: &dyn sqlparser::dialect::Dialect,
+) -> Option<(usize, usize)> {
+    let Ok(tokens) = Tokenizer::new(dialect, sql).tokenize_with_location() else {
+        return None;
+    };
+    let significant: Vec<&TokenWithSpan> = tokens
         .iter()
-        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .filter(|token| !matches!(token.token, Token::Whitespace(_)))
         .collect();
-    significant.windows(2).any(|pair| {
-        matches!(pair, [Token::Word(from), Token::Word(next)]
+    significant.windows(2).find_map(|pair| {
+        matches!(&pair[0].token, Token::Word(from)
             if from.keyword == sqlparser::keywords::Keyword::FROM
-                && next.quote_style.is_none()
-                && matches!(next.value.to_ascii_uppercase().as_str(), "WHERE" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "OFFSET" | "UNION" | "EXCEPT" | "INTERSECT"))
+        )
+        .then_some(())?;
+        matches!(&pair[1].token, Token::Word(next)
+                if next.quote_style.is_none()
+                && matches!(next.value.to_ascii_uppercase().as_str(), "WHERE" | "GROUP" | "ORDER" | "HAVING" | "UNION" | "EXCEPT" | "INTERSECT")
+        ).then_some((
+            pair[1].span.start.line as usize,
+            pair[1].span.start.column as usize,
+        ))
     })
 }
 
 fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
     let sql = sql.strip_prefix('\u{feff}').unwrap_or(sql);
     let parser = dialect.parser();
-    if *dialect == SqlDialect::Trino && has_empty_from_clause(sql, parser.as_ref()) {
+    if let Some(result) = validate_input_complexity(sql, parser.as_ref()) {
+        return result;
+    }
+    if let Some((line, column)) = (*dialect == SqlDialect::Trino)
+        .then(|| empty_from_clause_location(sql, parser.as_ref()))
+        .flatten()
+    {
         return (
             false,
             0,
             Some("sql parser error: FROM clause is missing a relation".to_string()),
-            None,
-            None,
+            Some(line),
+            Some(column),
             Vec::new(),
         );
     }
@@ -73,28 +170,60 @@ fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple 
                 parsed.inline_functions,
                 parsed.compatibility_metadata,
                 parsed.custom_statement_kinds,
+                parsed.source_type_names,
             )
         })
     } else {
         Parser::parse_sql(parser.as_ref(), sql)
-            .map(|statements| (statements, Vec::new(), Vec::new(), Vec::new()))
+            .map(|statements| (statements, Vec::new(), Vec::new(), Vec::new(), Vec::new()))
     };
     match parsed {
-        Ok((statements, inline_functions, compatibility_metadata, custom_statement_kinds)) => {
+        Ok((
+            statements,
+            inline_functions,
+            compatibility_metadata,
+            custom_statement_kinds,
+            source_type_names,
+        )) => {
             debug_assert!(custom_statement_kinds.len() <= statements.len());
             let mut warnings = if *dialect == SqlDialect::Trino {
-                let local_function_names = inline_function_names(&inline_functions);
                 let mut warning_statements = statements.clone();
-                warning_statements.extend(inline_functions);
-                warning_statements.extend(compatibility_metadata);
-                let mut warnings =
-                    find_unknown_functions(&warning_statements, &local_function_names);
+                warning_statements.extend(
+                    inline_functions
+                        .iter()
+                        .map(|(_, statement)| statement.clone()),
+                );
+                warning_statements.extend(compatibility_metadata.clone());
+                let mut warnings = Vec::new();
+                for (statement_index, statement) in statements.iter().enumerate() {
+                    let declarations: Vec<Statement> = inline_functions
+                        .iter()
+                        .filter(|(scope, _)| *scope == statement_index)
+                        .map(|(_, declaration)| declaration.clone())
+                        .collect();
+                    let local_function_names = inline_function_names(&declarations);
+                    warnings.extend(find_unknown_functions(
+                        std::slice::from_ref(statement),
+                        &local_function_names,
+                    ));
+                    warnings.extend(find_unknown_functions(&declarations, &local_function_names));
+                }
+                warnings.extend(find_unknown_functions(
+                    &compatibility_metadata,
+                    &HashSet::new(),
+                ));
                 find_unknown_types(&warning_statements, &mut warnings);
+                for ident in source_type_names {
+                    let name = ident.value.to_ascii_lowercase();
+                    let (line, column) = span_position(&ident);
+                    warnings.push(("type".to_string(), name, line, column));
+                }
                 warnings
             } else {
                 Vec::new()
             };
             warnings.sort_by_key(|w| (w.2.unwrap_or(usize::MAX), w.3.unwrap_or(usize::MAX)));
+            warnings.dedup();
             (true, statements.len(), None, None, None, warnings)
         }
         Err(err) => {
@@ -120,15 +249,18 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
 /// Walk every expression in the parsed statements and collect function calls
 /// whose name is not in the Trino catalog, with the call site's line/column.
 fn find_unknown_functions(
-    statements: &Vec<Statement>,
+    statements: &[Statement],
     local_function_names: &HashSet<String>,
 ) -> Vec<(String, String, Option<usize>, Option<usize>)> {
     let mut unknown = Vec::new();
-    let _ = visit_expressions(statements, |expr| {
+    let owned_statements = statements.to_vec();
+    let _ = visit_expressions(&owned_statements, |expr| {
         if let Expr::Function(func) = expr {
             if let Some(ident) = func.name.0.last().and_then(|part| part.as_ident()) {
                 let name = ident.value.to_ascii_lowercase();
-                if !local_function_names.contains(&name) && !is_known_trino_function(&name) {
+                let is_unqualified_local =
+                    func.name.0.len() == 1 && local_function_names.contains(&name);
+                if !is_unqualified_local && !is_known_trino_function(&name) {
                     let (line, column) = span_position(ident);
                     unknown.push(("function".to_string(), name, line, column));
                 }
@@ -176,68 +308,145 @@ fn is_known_trino_function(name: &str) -> bool {
 /// view columns, `ALTER TABLE` column operations, function return types) are
 /// visited directly.
 fn find_unknown_types(
-    statements: &Vec<Statement>,
+    statements: &[Statement],
     warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
 ) {
-    for statement in statements {
-        match statement {
-            Statement::CreateTable(create) => {
-                for column in &create.columns {
-                    collect_type_entries(&column.data_type, warnings);
-                }
-            }
-            Statement::CreateView(create) => {
-                for column in &create.columns {
-                    if let Some(data_type) = &column.data_type {
-                        collect_type_entries(data_type, warnings);
+    struct TypeVisitor<'a> {
+        warnings: &'a mut Vec<(String, String, Option<usize>, Option<usize>)>,
+    }
+
+    impl Visitor for TypeVisitor<'_> {
+        type Break = ();
+
+        fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
+            match statement {
+                Statement::CreateTable(create) => {
+                    for column in &create.columns {
+                        collect_type_entries(&column.data_type, self.warnings);
                     }
                 }
-            }
-            Statement::AlterTable(alter) => {
-                for operation in &alter.operations {
-                    match operation {
-                        sqlparser::ast::AlterTableOperation::AddColumn { column_def, .. } => {
-                            collect_type_entries(&column_def.data_type, warnings);
-                        }
-                        sqlparser::ast::AlterTableOperation::ChangeColumn { data_type, .. }
-                        | sqlparser::ast::AlterTableOperation::ModifyColumn { data_type, .. } => {
-                            collect_type_entries(data_type, warnings);
-                        }
-                        sqlparser::ast::AlterTableOperation::AlterColumn {
-                            op: sqlparser::ast::AlterColumnOperation::SetDataType { data_type, .. },
-                            ..
-                        } => {
-                            collect_type_entries(data_type, warnings);
-                        }
-                        sqlparser::ast::AlterTableOperation::AlterColumn { .. } => {}
-                        _ => {}
-                    }
-                }
-            }
-            Statement::CreateFunction(func) => {
-                if let Some(args) = &func.args {
-                    for arg in args {
-                        collect_type_entries(&arg.data_type, warnings);
-                    }
-                }
-                if let Some(return_type) = &func.return_type {
-                    match return_type {
-                        sqlparser::ast::FunctionReturnType::DataType(data_type)
-                        | sqlparser::ast::FunctionReturnType::SetOf(data_type) => {
-                            collect_type_entries(data_type, warnings);
+                Statement::CreateView(create) => {
+                    for column in &create.columns {
+                        if let Some(data_type) = &column.data_type {
+                            collect_type_entries(data_type, self.warnings);
                         }
                     }
                 }
+                Statement::AlterTable(alter) => {
+                    for operation in &alter.operations {
+                        match operation {
+                            sqlparser::ast::AlterTableOperation::AddColumn {
+                                column_def, ..
+                            } => {
+                                collect_type_entries(&column_def.data_type, self.warnings);
+                            }
+                            sqlparser::ast::AlterTableOperation::ChangeColumn {
+                                data_type, ..
+                            }
+                            | sqlparser::ast::AlterTableOperation::ModifyColumn {
+                                data_type, ..
+                            } => {
+                                collect_type_entries(data_type, self.warnings);
+                            }
+                            sqlparser::ast::AlterTableOperation::AlterColumn {
+                                op:
+                                    sqlparser::ast::AlterColumnOperation::SetDataType {
+                                        data_type, ..
+                                    },
+                                ..
+                            } => {
+                                collect_type_entries(data_type, self.warnings);
+                            }
+                            sqlparser::ast::AlterTableOperation::AlterColumn { .. } => {}
+                            _ => {}
+                        }
+                    }
+                }
+                Statement::CreateFunction(func) => {
+                    if let Some(args) = &func.args {
+                        for arg in args {
+                            collect_type_entries(&arg.data_type, self.warnings);
+                        }
+                    }
+                    if let Some(return_type) = &func.return_type {
+                        match return_type {
+                            sqlparser::ast::FunctionReturnType::DataType(data_type)
+                            | sqlparser::ast::FunctionReturnType::SetOf(data_type) => {
+                                collect_type_entries(data_type, self.warnings);
+                            }
+                        }
+                    }
+                }
+                Statement::DropFunction(drop) => {
+                    for function in &drop.func_desc {
+                        for argument in function.args.iter().flatten() {
+                            collect_type_entries(&argument.data_type, self.warnings);
+                        }
+                    }
+                }
+                Statement::Prepare { data_types, .. } => {
+                    for data_type in data_types {
+                        collect_type_entries(data_type, self.warnings);
+                    }
+                }
+                Statement::Declare { stmts } => {
+                    for declaration in stmts {
+                        if let Some(data_type) = &declaration.data_type {
+                            collect_type_entries(data_type, self.warnings);
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            match expr {
+                Expr::Cast { data_type, .. } => collect_type_entries(data_type, self.warnings),
+                Expr::TypedString(typed) => {
+                    collect_type_entries(&typed.data_type, self.warnings);
+                }
+                Expr::Function(function) => {
+                    if let FunctionArguments::List(arguments) = &function.args {
+                        for clause in &arguments.clauses {
+                            if let FunctionArgumentClause::JsonReturningClause(returning) = clause {
+                                collect_type_entries(&returning.data_type, self.warnings);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_table_factor(
+            &mut self,
+            table_factor: &TableFactor,
+        ) -> ControlFlow<Self::Break> {
+            if let TableFactor::JsonTable { columns, .. } = table_factor {
+                collect_json_table_types(columns, self.warnings);
+            }
+            ControlFlow::Continue(())
         }
     }
-    let _ = visit_expressions(statements, |expr| {
-        if let Expr::Cast { data_type, .. } = expr {
-            collect_type_entries(data_type, warnings);
+
+    let mut visitor = TypeVisitor { warnings };
+    let _ = statements.to_vec().visit(&mut visitor);
+}
+
+fn collect_json_table_types(
+    columns: &[JsonTableColumn],
+    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
+) {
+    for column in columns {
+        match column {
+            JsonTableColumn::Named(named) => collect_type_entries(&named.r#type, warnings),
+            JsonTableColumn::Nested(nested) => collect_json_table_types(&nested.columns, warnings),
+            JsonTableColumn::ForOrdinality(_) => {}
         }
-        ControlFlow::<()>::Continue(())
-    });
+    }
 }
 
 fn collect_type_entries(
@@ -301,12 +510,181 @@ fn strip_location(message: &str) -> String {
 fn extract_location(message: &str) -> (Option<usize>, Option<usize>) {
     // sqlparser error strings embed location as "at Line: N, Column: M"
     match LOCATION_PATTERN.captures(message) {
-        Some(captures) => (
-            captures.get(1).and_then(|m| m.as_str().parse().ok()),
-            captures.get(2).and_then(|m| m.as_str().parse().ok()),
-        ),
+        Some(captures) => {
+            let line = captures.get(1).and_then(|m| m.as_str().parse().ok());
+            let column = captures.get(2).and_then(|m| m.as_str().parse().ok());
+            if line == Some(0) || column == Some(0) {
+                (None, None)
+            } else {
+                (line, column)
+            }
+        }
         None => (None, None),
     }
+}
+
+fn statement_kind(tokens: &[&TokenWithSpan]) -> (String, Option<String>) {
+    let words: Vec<String> = tokens
+        .iter()
+        .filter_map(|token| match &token.token {
+            Token::Word(word) if word.quote_style.is_none() => {
+                Some(word.value.to_ascii_lowercase())
+            }
+            _ => None,
+        })
+        .collect();
+    let classify = |words: &[String]| -> String {
+        let Some(first) = words.first() else {
+            return "unknown".to_string();
+        };
+        match first.as_str() {
+            "select" | "table" | "values" | "with" => "query".to_string(),
+            "create" => {
+                let mut index = 1;
+                if words.get(index).is_some_and(|word| word == "or") {
+                    index += 2;
+                }
+                if words.get(index).is_some_and(|word| word == "materialized") {
+                    "create_materialized_view".to_string()
+                } else {
+                    words
+                        .get(index)
+                        .map_or_else(|| "create".to_string(), |word| format!("create_{word}"))
+                }
+            }
+            "alter" | "drop" => {
+                if words.get(1).is_some_and(|word| word == "materialized") {
+                    format!("{first}_materialized_view")
+                } else {
+                    words
+                        .get(1)
+                        .map_or_else(|| first.clone(), |word| format!("{first}_{word}"))
+                }
+            }
+            "set" | "reset" => words
+                .get(1)
+                .map_or_else(|| first.clone(), |word| format!("{first}_{word}")),
+            _ => first.clone(),
+        }
+    };
+    let kind = classify(&words);
+    let inner_start = match words.first().map(String::as_str) {
+        Some("prepare") => words
+            .iter()
+            .position(|word| word == "from")
+            .map(|index| index + 1),
+        Some("explain") => words.iter().enumerate().skip(1).find_map(|(index, word)| {
+            [
+                "alter", "call", "create", "delete", "drop", "insert", "merge", "select", "set",
+                "show", "table", "update", "values", "with",
+            ]
+            .contains(&word.as_str())
+            .then_some(index)
+        }),
+        _ => None,
+    };
+    let inner = inner_start.map(|index| classify(&words[index..]));
+    (kind, inner)
+}
+
+fn statement_info(sql: &str, dialect: &SqlDialect) -> Vec<StatementInfoTuple> {
+    let parser = dialect.parser();
+    let Ok(tokens) = Tokenizer::new(parser.as_ref(), sql).tokenize_with_location() else {
+        return Vec::new();
+    };
+    let significant: Vec<&TokenWithSpan> = tokens
+        .iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_) | Token::EOF))
+        .collect();
+    let mut result = Vec::new();
+    let mut start = 0usize;
+    let mut group_depth = 0usize;
+    let mut routine = false;
+    let mut routine_controls = Vec::new();
+    let mut after_end = false;
+    for (index, token) in significant.iter().enumerate() {
+        match &token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => group_depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                group_depth = group_depth.saturating_sub(1);
+            }
+            Token::Word(word) if word.quote_style.is_none() => {
+                let value = word.value.to_ascii_lowercase();
+                if index.saturating_sub(start) < 5 && value == "function" {
+                    routine = significant[start..index].iter().any(|candidate| {
+                        matches!(&candidate.token, Token::Word(word) if word.value.eq_ignore_ascii_case("create"))
+                    });
+                }
+                if routine {
+                    if value == "end" {
+                        routine_controls.pop();
+                        after_end = true;
+                    } else if ["begin", "case", "if", "loop", "repeat", "while"]
+                        .contains(&value.as_str())
+                    {
+                        let next_is_group = significant
+                            .get(index + 1)
+                            .is_some_and(|next| next.token == Token::LParen);
+                        if after_end {
+                            after_end = false;
+                        } else if value == "begin"
+                            || (!next_is_group && !routine_controls.is_empty())
+                        {
+                            routine_controls.push(value);
+                        }
+                    } else if after_end {
+                        after_end = false;
+                    }
+                }
+            }
+            Token::SemiColon if group_depth == 0 && (!routine || routine_controls.is_empty()) => {
+                if start < index {
+                    push_statement_info(&mut result, &significant[start..index]);
+                }
+                start = index + 1;
+                routine = false;
+                after_end = false;
+            }
+            _ => {}
+        }
+    }
+    if start < significant.len() {
+        push_statement_info(&mut result, &significant[start..]);
+    }
+    result
+}
+
+fn push_statement_info(result: &mut Vec<StatementInfoTuple>, tokens: &[&TokenWithSpan]) {
+    let Some(first) = tokens.first() else {
+        return;
+    };
+    let Some(last) = tokens.last() else {
+        return;
+    };
+    let (kind, inner_kind) = statement_kind(tokens);
+    result.push((
+        result.len(),
+        first.span.start.line as usize,
+        first.span.start.column as usize,
+        last.span.end.line as usize,
+        last.span.end.column as usize,
+        kind,
+        inner_kind,
+    ));
+}
+
+fn error_statement_index(
+    validation: &ValidationResultTuple,
+    statements: &[StatementInfoTuple],
+) -> Option<usize> {
+    let (Some(line), Some(column)) = (validation.3, validation.4) else {
+        return None;
+    };
+    statements
+        .iter()
+        .rev()
+        .find(|statement| (statement.1, statement.2) <= (line, column))
+        .map(|statement| statement.0)
 }
 
 /// Validate a SQL string (one or more statements) against a dialect.
@@ -340,12 +718,24 @@ fn validate_file(path: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
     Ok(validate_sql_impl(&contents, &parsed_dialect))
 }
 
+/// Validate SQL and return opt-in source metadata for each statement.
+#[pyfunction]
+#[pyo3(signature = (sql, dialect = "trino"))]
+fn analyze_statements(sql: &str, dialect: &str) -> PyResult<StatementAnalysisTuple> {
+    let parsed_dialect = SqlDialect::from_str(dialect)?;
+    let validation = validate_sql_impl(sql, &parsed_dialect);
+    let statements = statement_info(sql, &parsed_dialect);
+    let error_index = error_statement_index(&validation, &statements);
+    Ok((validation, statements, error_index))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", PACKAGE_VERSION)?;
     m.add("__doc__", "Rust-native core for trino_sql_validator.")?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(validate_file, m)?)?;
+    m.add_function(wrap_pyfunction!(analyze_statements, m)?)?;
     Ok(())
 }
 
@@ -386,6 +776,72 @@ mod tests {
         );
         assert!(valid);
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn statement_metadata_uses_source_kinds_and_routine_boundaries() {
+        let sql = "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT BEGIN DECLARE y BIGINT; IF x > 0 THEN RETURN x; END IF; RETURN y; END; EXPLAIN ALTER TABLE t SET PROPERTIES x = 1";
+        let statements = statement_info(sql, &trino());
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].0, 0);
+        assert_eq!(statements[0].5, "create_function");
+        assert_eq!(statements[0].6, None);
+        assert_eq!(statements[1].0, 1);
+        assert_eq!(statements[1].5, "explain");
+        assert_eq!(statements[1].6.as_deref(), Some("alter_table"));
+    }
+
+    #[test]
+    fn zero_parser_locations_are_not_exposed() {
+        assert_eq!(
+            extract_location("error at Line: 0, Column: 0"),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn excessive_expression_complexity_fails_safely_for_all_dialects() {
+        let sql = format!("SELECT {}", vec!["1"; 2_049].join(" + "));
+        for dialect in [SqlDialect::Trino, SqlDialect::Hive, SqlDialect::Generic] {
+            let (valid, count, message, line, column, warnings) = validate_sql_impl(&sql, &dialect);
+            assert!(!valid);
+            assert_eq!(count, 0);
+            assert_eq!(
+                message.as_deref(),
+                Some("sql parser error: maximum SQL statement complexity exceeded")
+            );
+            assert_eq!(line, Some(1));
+            assert!(column.is_some());
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn excessive_routine_nesting_fails_safely() {
+        let sql = format!(
+            "CREATE FUNCTION f() RETURNS BIGINT {}RETURN 1;{}",
+            "BEGIN ".repeat(MAX_NESTING_DEPTH + 1),
+            " END;".repeat(MAX_NESTING_DEPTH + 1)
+        );
+        let (valid, count, message, line, column, warnings) = validate_sql_impl(&sql, &trino());
+        assert!(!valid);
+        assert_eq!(count, 0);
+        assert_eq!(
+            message.as_deref(),
+            Some("sql parser error: maximum nesting depth exceeded")
+        );
+        assert_eq!(line, Some(1));
+        assert!(column.is_some());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn many_independent_statements_do_not_share_the_statement_budget() {
+        let sql = "SELECT 1;".repeat(1_000);
+        let (valid, count, message, _, _, warnings) = validate_sql_impl(&sql, &trino());
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(count, 1_000);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -537,7 +993,7 @@ mod tests {
         ] {
             let (valid, _, message, _, _, warnings) = validate_sql_impl(sql, &trino());
             assert!(valid, "unexpected error for {sql}: {message:?}");
-            assert_eq!(warnings.len(), 1);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
             assert_eq!(warnings[0].1, "marh");
             let prefix = &sql[..sql.find("marh").unwrap()];
             let expected_line = prefix.matches('\n').count() + 1;
@@ -557,7 +1013,7 @@ mod tests {
             let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
             assert!(valid, "unexpected error for {sql}: {message:?}");
             assert_eq!(count, 1);
-            assert!(warnings.is_empty());
+            assert!(warnings.is_empty(), "{warnings:?}");
         }
 
         let sql =

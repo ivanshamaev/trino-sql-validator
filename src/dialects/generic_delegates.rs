@@ -372,11 +372,11 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_limit_by(&self) -> bool {
-        GenericDialect::supports_limit_by(&GenericDialect {})
+        false
     }
 
     fn supports_limit_comma(&self) -> bool {
-        GenericDialect::supports_limit_comma(&GenericDialect {})
+        false
     }
 
     fn supports_listen_notify(&self) -> bool {

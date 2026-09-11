@@ -12,7 +12,7 @@ pip install trino-sql-validator
 ## Quickstart
 
 ```python
-from trino_sql_validator import validate, validate_file
+from trino_sql_validator import analyze_statements, validate, validate_file
 
 # A string with one or many statements
 result = validate("SELECT 1; SELECT * FROM t WHERE a > 0;")
@@ -27,6 +27,13 @@ print(result.error.line)     # 1
 
 # Validate a file
 result = validate_file("queries.sql", dialect="trino")
+
+# Opt-in per-statement metadata; indexes are zero-based
+analysis = analyze_statements("EXPLAIN SELECT 1; CALL system.custom_proc()")
+assert analysis.validation.valid
+assert analysis.statements[0].kind == "explain"
+assert analysis.statements[0].inner_kind == "query"
+assert analysis.statements[1].kind == "call"
 ```
 
 Invalid SQL (and files containing it) is returned as a `ValidationResult`;
@@ -56,6 +63,22 @@ existence*, not argument counts, precision/scale, or semantic correctness.
 `hive`/`generic` dialects skip these checks. False positives are possible if a
 deployed Trino adds plugin functions/types beyond the docs.
 
+Inline `WITH FUNCTION` names are exempt only within their own query scope.
+Qualified calls with the same final name are still checked. Procedure names in
+`CALL` and `ALTER TABLE ... EXECUTE` are not scalar functions and therefore do
+not produce `FunctionWarning`; their existence, parameters, arity, permissions,
+and connector availability require a Trino coordinator and are out of scope.
+
+### Statement metadata
+
+`analyze_statements()` is an opt-in API that returns the unchanged
+`ValidationResult` together with a tuple of `StatementInfo`. Each entry contains
+a zero-based index, source span, source-derived kind, and (for `EXPLAIN` or
+`PREPARE`) an `inner_kind` when it can be identified. On invalid multi-statement
+input, `error_statement_index` identifies the source statement when the parser
+provided a location. Existing `validate()` and `validate_file()` return types
+are unchanged.
+
 ### dbt and Jinja templates
 
 Jinja/dbt SQL is supported by default. `validate()` and `validate_file()` use
@@ -84,15 +107,26 @@ analysis. It may accept SQL that Trino would reject at analysis time (unknown
 columns/tables, duplicate columns), and it can reject exotic Trino-specific DDL.
 The validator has targeted compatibility parsing for documented Trino syntax,
 including nested `ROW`/`ARRAY`/`MAP` types, but it does not replace Trino's
-semantic analyzer. For the overwhelming majority of SELECT/DDL statements the
-results are accurate. See [`plan/roadmap.md`](plan/roadmap.md) for the path toward
+semantic analyzer. See [`plan/roadmap.md`](plan/roadmap.md) for the path toward
 stricter Trino fidelity.
 
 Parser fidelity is checked reproducibly against direct-string cases extracted
-from Apache Trino's parser tests. The pinned Trino 483 gate currently accepts
-456/456 extracted statements and 68/68 extracted types, and rejects 23/23
-direct negative statements. These figures describe the extractable syntax
-subset, not the full Trino semantic analyzer or connector runtime behavior.
+from Apache Trino's parser tests. With ordinary Java strings and text blocks,
+the pinned Trino 483 audit currently accepts 476/484 statements, 231/238
+expressions, 68/68 types, the extracted Functions/Routines subset, and rejects
+23/23 direct negative statements. Known differences are pinned in a named
+allowlist; new mismatches or a reduced extracted denominator fail the audit.
+These figures and the 276 independently checked positive fixture statements
+describe measured corpora, not complete Trino grammar or connector behavior.
+SQL embedded inside ordinary string literals, JSON paths, WKT, dynamic SQL, and
+unrendered macro output is intentionally opaque rather than recursively parsed.
+
+To keep invalid or adversarial input from exhausting the native parser stack,
+validation rejects a statement after 4,096 significant SQL tokens, nesting
+deeper than 256 groups or routine blocks, and an input after 65,536 significant
+tokens. The failure is returned as an ordinary invalid `ValidationResult`; when
+the limiting token has a source position, that position is included in the
+error. Semicolon-separated statements have independent per-statement budgets.
 
 ## Development
 
@@ -107,6 +141,9 @@ cargo test               # Rust tests
 pytest -q                # Python tests
 cargo fmt --check        # formatting
 cargo clippy --all-targets -- -D warnings
+python tools/extract_functions.py --ref 483 --check
+python tools/extract_types.py --ref 483 --check
+python tools/audit_upstream_parsers.py --baseline plan/trino_483_audit_baseline.json --fail-on-regression
 ```
 
 ## License

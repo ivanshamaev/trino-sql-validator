@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from . import _native
+from ._native import analyze_statements as _native_analyze_statements
 from ._native import validate as _native_validate
 from ._native import validate_file as _native_validate_file
 
@@ -18,9 +19,12 @@ __all__ = [
     "Error",
     "FunctionWarning",
     "JinjaMode",
+    "StatementAnalysis",
+    "StatementInfo",
     "TypeWarning",
     "ValidationResult",
     "__version__",
+    "analyze_statements",
     "validate",
     "validate_file",
 ]
@@ -39,6 +43,13 @@ _NativeResult = tuple[
 ]
 """Tuple shape returned by the Rust core: (valid, statement_count, error
 message, line, column, warnings)."""
+
+_NativeStatementInfo = tuple[int, int, int, int, int, str, str | None]
+_NativeStatementAnalysis = tuple[
+    _NativeResult,
+    tuple[_NativeStatementInfo, ...],
+    int | None,
+]
 
 __version__ = _native.__version__
 
@@ -184,14 +195,37 @@ class ValidationResult:
         return f"<ValidationResult valid=True statements={self.statement_count}>"
 
 
+@dataclass(frozen=True)
+class StatementInfo:
+    """Source metadata for one statement, with a zero-based index."""
+
+    index: int
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+    kind: str
+    inner_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class StatementAnalysis:
+    """Validation outcome plus opt-in per-statement source metadata."""
+
+    validation: ValidationResult
+    statements: tuple[StatementInfo, ...]
+    error_statement_index: int | None = None
+
+    def __bool__(self) -> bool:
+        return self.validation.valid
+
+
 _SUPPORTED_DIALECTS = ("trino", "hive", "generic")
 
 
 def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
     if dialect.lower() not in _SUPPORTED_DIALECTS:
-        raise ValueError(
-            f"unknown dialect {dialect!r}; expected one of {_SUPPORTED_DIALECTS}"
-        )
+        raise ValueError(f"unknown dialect {dialect!r}; expected one of {_SUPPORTED_DIALECTS}")
     valid, statement_count, message, line, column, warnings = call
     converted = []
     for kind, name, wl, wc in warnings:
@@ -219,6 +253,24 @@ def validate(
     never affect ``valid``.
     """
     return _validate(dialect, _native_validate(_prepare_sql(sql, jinja), dialect))
+
+
+def analyze_statements(
+    sql: str, *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
+) -> StatementAnalysis:
+    """Validate SQL and return source metadata for each lexical statement.
+
+    Statement indexes are zero-based. ``inner_kind`` identifies the wrapped
+    statement for ``EXPLAIN`` and ``PREPARE`` when it can be determined.
+    Existing :func:`validate` behavior and result types are unchanged.
+    """
+    native: _NativeStatementAnalysis = _native_analyze_statements(_prepare_sql(sql, jinja), dialect)
+    native_result, native_statements, error_index = native
+    return StatementAnalysis(
+        validation=_validate(dialect, native_result),
+        statements=tuple(StatementInfo(*statement) for statement in native_statements),
+        error_statement_index=error_index,
+    )
 
 
 def validate_file(

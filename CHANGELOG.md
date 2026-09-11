@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-09-11
+
+### Added
+
+- Added pre-parse complexity budgets for total tokens, per-statement tokens,
+  nested groups, and routine blocks, with process-isolated crash regressions.
+- Added opt-in `analyze_statements()` metadata with source spans, zero-based
+  statement indexes, source-derived kinds, EXPLAIN/PREPARE inner kinds, and an
+  error-statement index where a parser location is available.
+- Added reproducible Trino 483 function/type catalogs with resolved source SHA,
+  per-file checksums, read-only `--check`, and documented Geometry,
+  SphericalGeography, and BingTile types.
+- Expanded fixture and upstream gates to independently run all 276 positive
+  fixture statements, a 57-case composition matrix, Java text blocks, and the
+  executable Functions/Routines subset.
+
+### Fixed
+
+- Preserved function/type warnings and exact source positions across nested ROW
+  and postfix ARRAY types, SQL/JSON clauses, wrapped/custom statements, CALL and
+  ALTER EXECUTE expressions, routines, and full Iceberg time-travel expressions.
+- Limited inline-function exemptions to their query and unqualified name, and
+  enabled WITH FUNCTION/WITH SESSION under their supported wrappers.
+- Rejected non-Trino CREATE INDEX, QUALIFY, LIMIT expressions/comma syntax,
+  UPDATE FROM, DELETE USING, DML RETURNING, ILIKE, `<=>`, bare table functions,
+  non-literal column defaults, and malformed CALL/ALTER EXECUTE forms. These are
+  intentional false-accept corrections for `dialect="trino"`; generic behavior
+  is unchanged.
+- Accepted Trino non-reserved `limit`/`offset` identifiers, full
+  `FOR VERSION AS OF <valueExpression>`, and postfix ARRAY types consistently.
+
+Procedure existence, parameter names, arity/types, connector capabilities, and
+other semantic checks remain outside the offline syntax contract.
+
 ## [0.13.0] - 2026-09-11
 
 ### Added

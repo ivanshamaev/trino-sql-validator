@@ -15,7 +15,8 @@ Layout:
   stubs (`_native.pyi`), `py.typed`.
 - `tests/` — pytest suite for the public API (+ `.sql` fixtures).
 - `plan/` — planning docs (`plan.md`, `roadmap.md`, `functions-validation.md`).
-- `tools/extract_functions.py` — regenerates `src/functions.rs` from Trino docs.
+- `tools/extract_functions.py` / `tools/extract_types.py` — regenerate the
+  committed catalogs and source manifests from pinned Trino docs.
 
 ## Source of truth
 
@@ -23,7 +24,7 @@ Layout:
   Bump it there; keep `pyproject.toml` `[project]` consistent. Do NOT bump only one.
 - **Public API:** defined once in `python/trino_sql_validator/__init__.py`; mirror
   the native functions via the `#[pyfunction]`s in `src/lib.rs`.
-- **Tools:** Rust stable (see `rust-toolchain.toml`), Python >= 3.9, maturin,
+- **Tools:** Rust stable (see `rust-toolchain.toml`), Python >= 3.10, maturin,
   pytest, ruff, mypy.
 
 ## Commands
@@ -51,10 +52,12 @@ maturin build --release          # wheels
 maturin sdist                    # source distribution
 
 # Regenerate the Trino function/type catalogs from upstream docs
-python tools/extract_functions.py            # fetch from GitHub (-> src/functions.rs)
+python tools/extract_functions.py --ref 483  # fetch pinned docs + write catalog/manifest
 python tools/extract_functions.py --docs-path /path/to/trino/docs/src/main/sphinx/functions  # local checkout
-python tools/extract_types.py                # fetch from GitHub (-> src/types.rs)
+python tools/extract_types.py --ref 483      # fetch pinned docs + write catalog/manifest
 python tools/extract_types.py --docs-path /path/to/trino  # local checkout
+python tools/extract_functions.py --ref 483 --check
+python tools/extract_types.py --ref 483 --check
 ```
 
 ## Conventions / rules

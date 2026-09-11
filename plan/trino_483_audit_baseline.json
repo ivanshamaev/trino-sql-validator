@@ -1,0 +1,65 @@
+{
+  "repository": "trinodb/trino",
+  "revision": "50b0b50b75abd47f830b7805ee1b51716eb4065e",
+  "cases": {
+    "positive_statements": {
+      "minimum_total": 484,
+      "allowed_mismatches": [
+        "positive_statements:1f69438035266f98",
+        "positive_statements:20698d45d8332844",
+        "positive_statements:56d48ad1cdf8e07d",
+        "positive_statements:7eea2c574cd2771f",
+        "positive_statements:9d5cbd44b3173ec4",
+        "positive_statements:b72e07f98723c611",
+        "positive_statements:edf83b00c14abc79",
+        "positive_statements:fd6718febae203b1"
+      ]
+    },
+    "positive_expressions": {
+      "minimum_total": 238,
+      "allowed_mismatches": [
+        "positive_expressions:363d97b00d09908c",
+        "positive_expressions:3833bcf0d128cc2f",
+        "positive_expressions:3b1cf222d77f22f5",
+        "positive_expressions:577d1930fc931612",
+        "positive_expressions:58cdf78c04accf8b",
+        "positive_expressions:c4701632187df77c",
+        "positive_expressions:d699d9ede2c2b482"
+      ]
+    },
+    "positive_types": {
+      "minimum_total": 68,
+      "allowed_mismatches": []
+    },
+    "positive_function_statements": {
+      "minimum_total": 1,
+      "allowed_mismatches": []
+    },
+    "positive_routine_statements": {
+      "minimum_total": 5,
+      "allowed_mismatches": []
+    },
+    "positive_function_specifications": {
+      "minimum_total": 1,
+      "allowed_mismatches": []
+    },
+    "negative_statements_direct": {
+      "minimum_total": 23,
+      "allowed_mismatches": []
+    },
+    "negative_statements_error_suite": {
+      "minimum_total": 55,
+      "allowed_mismatches": [
+        "negative_statements_error_suite:45f93644d4bb84d4",
+        "negative_statements_error_suite:5fe0fcee418e8293",
+        "negative_statements_error_suite:aae745a3ffaf6b7a"
+      ]
+    },
+    "negative_expressions_error_suite": {
+      "minimum_total": 1,
+      "allowed_mismatches": [
+        "negative_expressions_error_suite:f8bf4e3161e6b592"
+      ]
+    }
+  }
+}
