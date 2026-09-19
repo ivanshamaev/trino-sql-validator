@@ -70,9 +70,11 @@ DOC_PATHS = [f"{FUNCTIONS_PATH}/{name}" for name in FUNCTION_FILES]
 DIRECTIVE_RE = re.compile(r":::\{function\}\s+([a-zA-Z0-9_]+)")
 CROSS_REF_RE = re.compile(r"\{func\}\s*`([a-zA-Z0-9_]+)`")
 SPECIAL_FUNCTIONS = {
+    "combine_hash",
     "current_date",
     "current_time",
     "current_timestamp",
+    "fail",
     "grouping",
     "json_array",
     "json_exists",

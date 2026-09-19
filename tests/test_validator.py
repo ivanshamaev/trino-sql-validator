@@ -241,6 +241,27 @@ def test_known_functions_produce_no_warnings() -> None:
     assert result.unknown_functions == []
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT fail('boom')",
+        "SELECT combine_hash(1, 2)",
+    ],
+)
+def test_hidden_trino_functions_produce_no_warnings(sql: str) -> None:
+    result = validate(sql, dialect="trino")
+
+    assert result.valid is True
+    assert result.warnings == ()
+
+
+def test_similar_unknown_function_still_reports_warning() -> None:
+    result = validate("SELECT failx('boom')", dialect="trino")
+
+    assert result.valid is True
+    assert result.unknown_functions == ["failx"]
+
+
 def test_unknown_function_reports_warning() -> None:
     result = validate("SELECT marh(1.5)")
     assert result.valid is True
