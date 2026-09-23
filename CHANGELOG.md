@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-09-23
+
+### Added
+
+- Added the non-fatal `AliasWarning` and `ambiguous_aliases` result property for
+  unquoted contextual aliases named `ALL`, `OVER`, `PARTITION`, `RETURN`, or
+  `AT`, with original source positions.
+
+### Fixed
+
+- Accepted `AT` as a Trino non-reserved identifier instead of treating every
+  occurrence as a temporal operator, while retaining `AT TIME ZONE`, `AT LOCAL`,
+  and malformed-temporal-expression validation.
+
 ## [0.15.0] - 2026-09-19
 
 ### Fixed

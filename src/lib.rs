@@ -3,7 +3,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use sqlparser::ast::{visit_expressions, FunctionArgumentClause, FunctionArguments};
 use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, Statement};
-use sqlparser::ast::{JsonTableColumn, TableFactor, Visit, Visitor};
+use sqlparser::ast::{JsonTableColumn, Query, Select, SelectItem, TableAlias, TableFactor};
+use sqlparser::ast::{Visit, Visitor};
 use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
@@ -21,7 +22,7 @@ const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `(valid, statement_count, error_message, error_line, error_column,
 /// warnings)` where each warning is `(kind, name, line, column)` and `kind`
-/// is `"function"` or `"type"`.
+/// is `"function"`, `"type"`, or `"alias"`.
 type ValidationResultTuple = (
     bool,
     usize,
@@ -218,6 +219,7 @@ fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple 
                     let (line, column) = span_position(&ident);
                     warnings.push(("type".to_string(), name, line, column));
                 }
+                warnings.extend(find_ambiguous_aliases(&warning_statements));
                 warnings
             } else {
                 Vec::new()
@@ -300,6 +302,106 @@ fn is_known_trino_function(name: &str) -> bool {
                 | "table"
                 | "table_changes"
         )
+}
+
+fn collect_ambiguous_alias(
+    ident: &Ident,
+    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
+) {
+    let name = ident.value.to_ascii_lowercase();
+    if ident.quote_style.is_none()
+        && matches!(
+            name.as_str(),
+            "all" | "at" | "over" | "partition" | "return"
+        )
+    {
+        let (line, column) = span_position(ident);
+        warnings.push(("alias".to_string(), name, line, column));
+    }
+}
+
+fn collect_table_alias(
+    alias: &TableAlias,
+    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
+) {
+    collect_ambiguous_alias(&alias.name, warnings);
+    for column in &alias.columns {
+        collect_ambiguous_alias(&column.name, warnings);
+    }
+}
+
+fn find_ambiguous_aliases(
+    statements: &[Statement],
+) -> Vec<(String, String, Option<usize>, Option<usize>)> {
+    struct AliasVisitor {
+        warnings: Vec<(String, String, Option<usize>, Option<usize>)>,
+    }
+
+    impl Visitor for AliasVisitor {
+        type Break = ();
+
+        fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+            if let Some(with) = &query.with {
+                for cte in &with.cte_tables {
+                    collect_table_alias(&cte.alias, &mut self.warnings);
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_select(&mut self, select: &Select) -> ControlFlow<Self::Break> {
+            for item in &select.projection {
+                match item {
+                    SelectItem::ExprWithAlias { alias, .. } => {
+                        collect_ambiguous_alias(alias, &mut self.warnings);
+                    }
+                    SelectItem::ExprWithAliases { aliases, .. } => {
+                        for alias in aliases {
+                            collect_ambiguous_alias(alias, &mut self.warnings);
+                        }
+                    }
+                    SelectItem::QualifiedWildcard(_, options) | SelectItem::Wildcard(options) => {
+                        if let Some(alias) = &options.opt_alias {
+                            collect_ambiguous_alias(alias, &mut self.warnings);
+                        }
+                    }
+                    SelectItem::UnnamedExpr(_) => {}
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_table_factor(
+            &mut self,
+            table_factor: &TableFactor,
+        ) -> ControlFlow<Self::Break> {
+            let alias = match table_factor {
+                TableFactor::Table { alias, .. }
+                | TableFactor::Derived { alias, .. }
+                | TableFactor::TableFunction { alias, .. }
+                | TableFactor::Function { alias, .. }
+                | TableFactor::UNNEST { alias, .. }
+                | TableFactor::JsonTable { alias, .. }
+                | TableFactor::OpenJsonTable { alias, .. }
+                | TableFactor::NestedJoin { alias, .. }
+                | TableFactor::Pivot { alias, .. }
+                | TableFactor::Unpivot { alias, .. }
+                | TableFactor::MatchRecognize { alias, .. }
+                | TableFactor::XmlTable { alias, .. }
+                | TableFactor::SemanticView { alias, .. } => alias,
+            };
+            if let Some(alias) = alias {
+                collect_table_alias(alias, &mut self.warnings);
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut visitor = AliasVisitor {
+        warnings: Vec::new(),
+    };
+    let _ = statements.to_vec().visit(&mut visitor);
+    visitor.warnings
 }
 
 /// Collect data types that are not in the Trino catalog into `warnings`,
@@ -1093,6 +1195,32 @@ mod tests {
         let (_, _, _, _, _, warnings) =
             validate_sql_impl("SELECT round(1.5), array_agg(x), count(*) FROM t", &trino());
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn contextual_aliases_produce_non_fatal_warnings() {
+        for alias in ["all", "over", "partition", "return", "at"] {
+            let sql = format!("SELECT 1 AS {alias}");
+            let (valid, count, error, _, _, warnings) = validate_sql_impl(&sql, &trino());
+
+            assert!(valid, "unexpected error for {sql}: {error:?}");
+            assert_eq!(count, 1);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0].0, "alias");
+            assert_eq!(warnings[0].1, alias);
+        }
+        for sql in [
+            "SELECT * FROM orders at",
+            "WITH AT AS (SELECT 1) SELECT * FROM AT",
+        ] {
+            let (valid, count, error, _, _, warnings) = validate_sql_impl(sql, &trino());
+
+            assert!(valid, "unexpected error for {sql}: {error:?}");
+            assert_eq!(count, 1);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0].0, "alias");
+            assert_eq!(warnings[0].1, "at");
+        }
     }
 
     #[test]

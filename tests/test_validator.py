@@ -205,8 +205,8 @@ def test_documented_fixture_corpus_validates(filename: str, statement_count: int
     assert result.valid is True
     assert result.statement_count == statement_count
     assert result.error is None
-    if filename != "iceberg_trino_sqldemo.sql":
-        assert result.warnings == ()
+    expected_warning_names = ("all",) if filename == "example-queries.sql" else ()
+    assert tuple(warning.name for warning in result.warnings) == expected_warning_names
 
 
 def test_validate_file_empty() -> None:
@@ -806,12 +806,11 @@ def test_at_local_preserves_expression_warning_position() -> None:
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT current_timestamp AT",
         "SELECT current_timestamp AT UTC",
         "SELECT current_timestamp AT TIME",
     ],
 )
-def test_at_local_rejects_incomplete_or_unknown_modifiers(sql: str) -> None:
+def test_at_temporal_operator_rejects_incomplete_or_unknown_modifiers(sql: str) -> None:
     result = validate(sql)
 
     assert result.valid is False

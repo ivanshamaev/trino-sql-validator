@@ -23,7 +23,7 @@ FIXTURE_EXPECTATIONS = {
     "datamart_example.sql": FixtureExpectation(True, 1),
     "ddl_multi.sql": FixtureExpectation(True, 3),
     "empty.sql": FixtureExpectation(True, 0),
-    "example-queries.sql": FixtureExpectation(True, 76),
+    "example-queries.sql": FixtureExpectation(True, 76, warning_names=("all",)),
     "iceberg_trino_sqldemo.sql": FixtureExpectation(True, 100),
     "invalid_one.sql": FixtureExpectation(False, 0, error_fragment="FORM"),
     "samples.sql": FixtureExpectation(True, 6),
@@ -168,6 +168,9 @@ def positive_fixture_statements() -> list[tuple[str, int, str]]:
 
 
 POSITIVE_FIXTURE_STATEMENTS = positive_fixture_statements()
+POSITIVE_STATEMENT_WARNING_NAMES = {
+    ("example-queries.sql", 53): ("all",),
+}
 
 
 def test_every_sql_fixture_has_an_explicit_expectation() -> None:
@@ -227,7 +230,8 @@ def test_every_positive_fixture_statement_independently(
 
     assert result.valid, f"{filename}::{statement_index}: {result.error}"
     assert result.statement_count == 1
-    assert result.warnings == (), f"{filename}::{statement_index}: {result.warnings}"
+    expected_warnings = POSITIVE_STATEMENT_WARNING_NAMES.get((filename, statement_index), ())
+    assert tuple(warning.name for warning in result.warnings) == expected_warnings
 
 
 def test_fixture_splitter_handles_comments_dollar_bodies_and_routine_semicolons() -> None:

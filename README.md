@@ -40,7 +40,7 @@ Invalid SQL (and files containing it) is returned as a `ValidationResult`;
 it is **not** raised as an exception. Only genuine misuse (unknown dialect,
 unreadable file) raises.
 
-### Catalog warnings (functions and data types)
+### Advisory warnings
 
 For `dialect="trino"`, `validate()` also checks that every function called and
 every data type used in the SQL exists in the documented Trino catalog. Unknown
@@ -57,6 +57,23 @@ result = validate("CREATE TABLE t (a bignum, b bigint)")  # bigint vs bignum
 print(result.warnings[0])                   # TypeWarning(name='bignum', line=1, column=19)
 print(result.unknown_types)                 # ['bignum']
 ```
+
+The contextual words `ALL`, `OVER`, `PARTITION`, `RETURN`, and `AT` are valid
+non-reserved Trino identifiers, but are easy to confuse with surrounding SQL
+syntax. Using one as an alias therefore produces a non-fatal `AliasWarning`;
+quote the alias to make the identifier intent explicit and suppress the warning:
+
+```python
+result = validate("SELECT orderdate AS At")
+assert result.valid
+print(result.warnings[0])                   # ambiguous unquoted alias 'at' at line 1, column 21
+print(result.ambiguous_aliases)             # ['at']
+
+assert validate('SELECT orderdate AS "At"').warnings == ()
+```
+
+`AT` is also used by the temporal operators `AT TIME ZONE` and `AT LOCAL`.
+Those operator forms do not produce alias warnings.
 
 The catalogs are auto-generated from the Trino docs and only check *name
 existence*, not argument counts, precision/scale, or semantic correctness.

@@ -1,8 +1,9 @@
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 __version__: str
 
-_Warning: TypeAlias = tuple[str, str, int | None, int | None]
+_WarningKind: TypeAlias = Literal["function", "type", "alias"]
+_Warning: TypeAlias = tuple[_WarningKind, str, int | None, int | None]
 _Validation: TypeAlias = tuple[bool, int, str | None, int | None, int | None, tuple[_Warning, ...]]
 _StatementInfo: TypeAlias = tuple[int, int, int, int, int, str, str | None]
 

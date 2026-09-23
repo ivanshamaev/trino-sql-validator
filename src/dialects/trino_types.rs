@@ -2344,15 +2344,66 @@ fn normalize_ipaddress_literals(tokens: &mut Vec<TokenWithSpan>) {
     }
 }
 
-fn normalize_at_local(tokens: &mut Vec<TokenWithSpan>) -> Result<(), ParserError> {
+fn can_end_expression_before_at(tokens: &[TokenWithSpan], at: usize) -> bool {
+    let Some(previous) = previous_significant(tokens, at) else {
+        return false;
+    };
+    match &tokens[previous].token {
+        Token::Word(word) if word.quote_style.is_some() => true,
+        Token::Word(word) => ![
+            "all",
+            "and",
+            "as",
+            "between",
+            "by",
+            "distinct",
+            "else",
+            "from",
+            "group",
+            "having",
+            "in",
+            "join",
+            "like",
+            "not",
+            "on",
+            "or",
+            "order",
+            "over",
+            "partition",
+            "return",
+            "select",
+            "then",
+            "values",
+            "when",
+            "where",
+        ]
+        .iter()
+        .any(|keyword| word.value.eq_ignore_ascii_case(keyword)),
+        Token::Number(_, _)
+        | Token::SingleQuotedString(_)
+        | Token::UnicodeStringLiteral(_)
+        | Token::HexStringLiteral(_)
+        | Token::Placeholder(_)
+        | Token::RParen
+        | Token::RBracket
+        | Token::RBrace => true,
+        _ => false,
+    }
+}
+
+fn normalize_at_syntax(tokens: &mut Vec<TokenWithSpan>) {
     for at in (0..tokens.len()).rev() {
         if !is_unquoted_word(&tokens[at], "at") {
             continue;
         }
         let Some(modifier) = next_significant(tokens, at + 1, tokens.len()) else {
-            return Err(syntax_error(&tokens[at], "AT requires TIME ZONE or LOCAL"));
+            if let Token::Word(word) = &mut tokens[at].token {
+                word.keyword = Keyword::NoKeyword;
+            }
+            continue;
         };
-        if is_unquoted_word(&tokens[modifier], "local") {
+        let can_be_operator = can_end_expression_before_at(tokens, at);
+        if can_be_operator && is_unquoted_word(&tokens[modifier], "local") {
             let source = tokens[modifier].clone();
             replace_word(&mut tokens[modifier], "TIME", Keyword::TIME);
             tokens.insert(modifier + 1, word_with_span(&source, "ZONE", Keyword::ZONE));
@@ -2360,22 +2411,12 @@ fn normalize_at_local(tokens: &mut Vec<TokenWithSpan>) -> Result<(), ParserError
                 modifier + 2,
                 token_with_span(Token::SingleQuotedString("UTC".to_string()), &source),
             );
-            continue;
-        }
-        if !is_unquoted_word(&tokens[modifier], "time") {
-            return Err(syntax_error(
-                &tokens[modifier],
-                "AT requires TIME ZONE or LOCAL",
-            ));
-        }
-        let Some(zone) = next_significant(tokens, modifier + 1, tokens.len()) else {
-            return Err(syntax_error(&tokens[modifier], "AT TIME requires ZONE"));
-        };
-        if !is_unquoted_word(&tokens[zone], "zone") {
-            return Err(syntax_error(&tokens[zone], "AT TIME requires ZONE"));
+        } else if !(can_be_operator && is_unquoted_word(&tokens[modifier], "time")) {
+            if let Token::Word(word) = &mut tokens[at].token {
+                word.keyword = Keyword::NoKeyword;
+            }
         }
     }
-    Ok(())
 }
 
 fn is_relation_time_travel_position(tokens: &[TokenWithSpan], for_index: usize) -> bool {
@@ -4438,7 +4479,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     compatibility_metadata.extend(normalize_pivot_group_by(&mut tokens, dialect)?);
     normalize_nearest_relations(&mut tokens, dialect)?;
     normalize_ipaddress_literals(&mut tokens);
-    normalize_at_local(&mut tokens)?;
+    normalize_at_syntax(&mut tokens);
     normalize_iceberg_time_travel(&mut tokens);
     normalize_trino_non_decimal_integer_literals(&mut tokens);
     normalize_between_symmetry(&mut tokens);
@@ -4618,11 +4659,14 @@ mod tests {
     }
 
     #[test]
-    fn at_local_requires_a_complete_modifier() {
+    fn at_local_distinguishes_the_operator_from_identifiers() {
         let dialect = TrinoDialect {};
         assert!(parse_sql(&dialect, "SELECT current_timestamp AT LOCAL").is_ok());
-        assert!(parse_sql(&dialect, "SELECT current_timestamp AT").is_err());
+        assert!(parse_sql(&dialect, "SELECT current_timestamp AT").is_ok());
+        assert!(parse_sql(&dialect, "SELECT At LOCAL FROM t").is_ok());
+        assert!(parse_sql(&dialect, "SELECT a + At LOCAL FROM t").is_ok());
         assert!(parse_sql(&dialect, "SELECT current_timestamp AT TIME").is_err());
+        assert!(parse_sql(&dialect, "SELECT current_timestamp AT UTC").is_err());
     }
 
     #[test]

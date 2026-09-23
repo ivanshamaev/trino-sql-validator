@@ -16,6 +16,7 @@ from ._native import validate as _native_validate
 from ._native import validate_file as _native_validate_file
 
 __all__ = [
+    "AliasWarning",
     "Error",
     "FunctionWarning",
     "JinjaMode",
@@ -31,7 +32,7 @@ __all__ = [
 
 _NativeWarning = tuple[str, str, int | None, int | None]
 """A single analytical warning from the Rust core: (kind, name, line, column)
-where kind is ``"function"`` or ``"type"``."""
+where kind is ``"function"``, ``"type"``, or ``"alias"``."""
 
 _NativeResult = tuple[
     bool,
@@ -123,6 +124,25 @@ class Error:
 
 
 @dataclass(frozen=True)
+class AliasWarning:
+    """A contextual unquoted alias that is legal in Trino but easy to misread.
+
+    ``valid`` stays ``True`` because the alias is syntactically valid. Quoting
+    the alias makes the identifier intent explicit and suppresses the warning.
+    """
+
+    name: str
+    line: int | None = None
+    column: int | None = None
+
+    def __str__(self) -> str:
+        message = f"ambiguous unquoted alias '{self.name}'"
+        if self.line is not None and self.column is not None:
+            return f"{message} at line {self.line}, column {self.column}"
+        return message
+
+
+@dataclass(frozen=True)
 class FunctionWarning:
     """A call to a function that is not in the documented Trino catalog.
 
@@ -167,7 +187,12 @@ class ValidationResult:
     valid: bool
     statement_count: int
     error: Error | None = None
-    warnings: tuple[FunctionWarning | TypeWarning, ...] = ()
+    warnings: tuple[AliasWarning | FunctionWarning | TypeWarning, ...] = ()
+
+    @property
+    def ambiguous_aliases(self) -> list[str]:
+        """Legal but potentially confusing unquoted aliases, in source order."""
+        return [warning.name for warning in self.warnings if isinstance(warning, AliasWarning)]
 
     @property
     def unknown_functions(self) -> list[str]:
@@ -227,10 +252,16 @@ def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
     if dialect.lower() not in _SUPPORTED_DIALECTS:
         raise ValueError(f"unknown dialect {dialect!r}; expected one of {_SUPPORTED_DIALECTS}")
     valid, statement_count, message, line, column, warnings = call
-    converted = []
+    converted: list[AliasWarning | FunctionWarning | TypeWarning] = []
     for kind, name, wl, wc in warnings:
-        cls = TypeWarning if kind == "type" else FunctionWarning
-        converted.append(cls(name=name, line=wl, column=wc))
+        if kind == "alias":
+            converted.append(AliasWarning(name=name, line=wl, column=wc))
+        elif kind == "function":
+            converted.append(FunctionWarning(name=name, line=wl, column=wc))
+        elif kind == "type":
+            converted.append(TypeWarning(name=name, line=wl, column=wc))
+        else:
+            raise RuntimeError(f"unknown native warning kind: {kind!r}")
     return ValidationResult(
         valid=bool(valid),
         statement_count=int(statement_count),
@@ -249,8 +280,8 @@ def validate(
     dialect or Jinja mode. By default, Jinja/dbt tags are masked before
     parsing; use ``jinja="reject"`` to parse the original template strictly.
     For the ``trino`` dialect the result also carries advisory warnings for
-    function calls and data types missing from the documented catalog; these
-    never affect ``valid``.
+    ambiguous aliases plus function calls and data types missing from the
+    documented catalog; these never affect ``valid``.
     """
     return _validate(dialect, _native_validate(_prepare_sql(sql, jinja), dialect))
 
