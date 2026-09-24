@@ -299,6 +299,8 @@ fn is_known_trino_function(name: &str) -> bool {
                 | "match_number"
                 | "next"
                 | "prev"
+                | "current_catalog"
+                | "current_user"
                 | "table"
                 | "table_changes"
         )
@@ -1170,10 +1172,39 @@ mod tests {
     #[test]
     fn documented_special_expressions_are_known() {
         let (_, _, _, _, _, warnings) = validate_sql_impl(
-            "SELECT current_date, current_timestamp, localtime, localtimestamp, grouping(a), histogram(x) FROM t GROUP BY GROUPING SETS ((a), ())",
+            "SELECT current_date, current_timestamp, localtime, localtimestamp, current_user, current_catalog, current_schema, current_path, grouping(a), histogram(x) FROM t GROUP BY GROUPING SETS ((a), ())",
             &trino(),
         );
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn create_table_like_source_is_not_reported_as_a_type() {
+        for sql in [
+            "CREATE TABLE copy (LIKE source INCLUDING PROPERTIES)",
+            "CREATE TABLE copy (id BIGINT, LIKE catalog.schema.source EXCLUDING PROPERTIES)",
+        ] {
+            let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+
+            assert!(valid, "unexpected error for {sql}: {message:?}");
+            assert_eq!(count, 1);
+            assert!(
+                warnings.is_empty(),
+                "unexpected warnings for {sql}: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_json_value_default_preserves_function_warnings() {
+        let sql = "SELECT JSON_VALUE(payload, '$.x' DEFAULT marh(1) ON EMPTY) FROM events";
+        let (valid, count, message, _, _, warnings) = validate_sql_impl(sql, &trino());
+
+        assert!(valid, "unexpected error: {message:?}");
+        assert_eq!(count, 1);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].0, "function");
+        assert_eq!(warnings[0].1, "marh");
     }
 
     #[test]

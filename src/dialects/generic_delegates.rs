@@ -4,15 +4,78 @@ use sqlparser::ast::{Expr, GranteesType, Statement};
 use sqlparser::dialect::{Dialect, GenericDialect, Precedence};
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
+use sqlparser::tokenizer::Token;
 
-use super::{trino_statements, TrinoDialect};
+use super::{trino_keywords, trino_statements, TrinoDialect};
+
+fn starts_row_count_clause(parser: &Parser) -> bool {
+    matches!(&parser.peek_token_ref().token, Token::Number(_, _))
+        || matches!(&parser.peek_token_ref().token, Token::Placeholder(value) if value == "?")
+        || parser.peek_keyword(Keyword::ALL)
+}
+
+fn starts_fetch_clause(parser: &Parser) -> bool {
+    parser
+        .peek_one_of_keywords(&[Keyword::FIRST, Keyword::NEXT])
+        .is_some()
+}
+
+fn starts_window_clause(parser: &Parser) -> bool {
+    let valid_name = matches!(
+        &parser.peek_nth_token_ref(0).token,
+        Token::Word(word)
+            if word.quote_style == Some('"')
+                || (word.quote_style.is_none()
+                    && !trino_keywords::is_reserved_keyword(word.keyword))
+    );
+    valid_name
+        && matches!(
+            &parser.peek_nth_token_ref(1).token,
+            Token::Word(word) if word.quote_style.is_none() && word.keyword == Keyword::AS
+        )
+        && parser.peek_nth_token_ref(2).token == Token::LParen
+}
+
+fn starts_set_clause(parser: &Parser) -> bool {
+    matches!(parser.peek_nth_token_ref(0).token, Token::Word(_))
+        && parser.peek_nth_token_ref(1).token == Token::Eq
+}
+
+fn is_trino_select_alias(keyword: Keyword, parser: &Parser) -> bool {
+    if trino_keywords::is_reserved_keyword(keyword) {
+        return false;
+    }
+    match keyword {
+        Keyword::LIMIT | Keyword::OFFSET => !starts_row_count_clause(parser),
+        Keyword::FETCH => !starts_fetch_clause(parser),
+        Keyword::WINDOW => !starts_window_clause(parser),
+        _ => true,
+    }
+}
+
+fn is_trino_table_alias(keyword: Keyword, parser: &Parser) -> bool {
+    if trino_keywords::is_reserved_keyword(keyword) {
+        return false;
+    }
+    match keyword {
+        Keyword::LIMIT | Keyword::OFFSET => !starts_row_count_clause(parser),
+        Keyword::FETCH => !starts_fetch_clause(parser),
+        Keyword::WINDOW => !starts_window_clause(parser),
+        Keyword::SET => !starts_set_clause(parser),
+        Keyword::PIVOT | Keyword::MATCH_RECOGNIZE => parser.peek_token_ref().token != Token::LParen,
+        Keyword::TABLESAMPLE => parser
+            .peek_one_of_keywords(&[Keyword::BERNOULLI, Keyword::SYSTEM])
+            .is_none(),
+        _ => true,
+    }
+}
 
 /// [`sqlparser::dialect::Dialect`] implementation for Trino.
 ///
-/// Trino-specific lexing and statement parsing are overridden below; every
-/// other trait hook is delegated to `GenericDialect`. Generated from
-/// sqlparser's trait with `tools/gen_generic_delegates.py`; regenerate it when
-/// bumping the sqlparser version.
+/// Trino-specific lexing, alias parsing, and statement parsing are overridden
+/// below; every other trait hook is delegated to `GenericDialect`. Generated
+/// from sqlparser's trait with `tools/gen_generic_delegates.py`; regenerate it
+/// when bumping the sqlparser version.
 impl Dialect for TrinoDialect {
     fn is_delimited_identifier_start(&self, ch: char) -> bool {
         ch == '"'
@@ -98,21 +161,22 @@ impl Dialect for TrinoDialect {
     }
 
     fn is_select_item_alias(&self, explicit: bool, kw: &Keyword, parser: &mut Parser) -> bool {
-        GenericDialect::is_select_item_alias(&GenericDialect {}, explicit, kw, parser)
+        if !explicit && *kw == Keyword::END {
+            return true;
+        }
+        !trino_keywords::is_reserved_keyword(*kw)
+            && (explicit || is_trino_select_alias(*kw, parser))
     }
 
     fn is_table_alias(&self, kw: &Keyword, parser: &mut Parser) -> bool {
-        if *kw == Keyword::TOP {
-            return true;
-        }
-        GenericDialect::is_table_alias(&GenericDialect {}, kw, parser)
+        is_trino_table_alias(*kw, parser)
     }
 
     fn is_table_factor_alias(&self, explicit: bool, kw: &Keyword, parser: &mut Parser) -> bool {
-        if *kw == Keyword::TOP {
+        if !explicit && *kw == Keyword::END {
             return true;
         }
-        GenericDialect::is_table_factor_alias(&GenericDialect {}, explicit, kw, parser)
+        !trino_keywords::is_reserved_keyword(*kw) && (explicit || is_trino_table_alias(*kw, parser))
     }
 
     fn is_table_factor(&self, kw: &Keyword, parser: &mut Parser) -> bool {

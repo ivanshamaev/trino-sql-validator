@@ -6,6 +6,7 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect};
 pub mod trino_statements;
 
 mod generic_delegates;
+mod trino_keywords;
 mod trino_types;
 
 pub(crate) use trino_types::parse_sql as parse_trino_sql;
@@ -52,9 +53,9 @@ impl SqlDialect {
 /// A `sqlparser` dialect tuned for Trino (Presto-family) syntax.
 ///
 /// Trino has no dedicated upstream dialect, so this is a thin override on top
-/// of [`GenericDialect`]. Behaviour matches `GenericDialect` for every trait
-/// hook (see [`dialects::generic_delegates`]) except for the Trino-specific
-/// lexing rules and statement parsing ([`trino_statements`]). The most
+/// of [`GenericDialect`]. Behaviour matches `GenericDialect` for most trait
+/// hooks (see [`dialects::generic_delegates`]) except for Trino-specific alias
+/// and lexing rules and statement parsing ([`trino_statements`]). The most
 /// impactful lexing difference today: Trino rejects backquoted identifiers (it
 /// allows only double-quoted identifiers), whereas Generic/Hive accept
 /// backticks. The actual [`Dialect`] impl lives in `generic_delegates.rs`.

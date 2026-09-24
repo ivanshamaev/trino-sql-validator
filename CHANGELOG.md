@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-09-24
+
+### Fixed
+
+- Rejected all 83 Trino reserved keywords when used as unquoted projection,
+  table, subquery, CTE, or alias-column names, with source locations and no
+  advisory warning for invalid SQL.
+- Preserved every Trino non-reserved keyword as an explicit or unambiguous
+  implicit alias, including `PARTITION`, `MATCH`, and `TABLESAMPLE`, without
+  consuming real `LIMIT`, `OFFSET`, `FETCH`, `WINDOW`, `PIVOT`,
+  `MATCH_RECOGNIZE`, or `TABLESAMPLE` clauses.
+- Rejected single-quoted aliases while retaining identifier-prefixed typed
+  literals, and preserved double-quoted reserved identifiers in DDL object
+  names, aliases, and qualified column references.
+- Accepted the Iceberg parser fixture's 247 Trino statements, including
+  parenthesized `ARRAY` column types, top-level `TABLE` queries, table comments
+  followed by properties, and SQL/JSON value, object, and wrapper clauses.
+- Made the fixture inventory retain invalid positive statements instead of
+  silently filtering them through the validator before parametrization.
+
 ## [0.16.0] - 2026-09-23
 
 ### Added

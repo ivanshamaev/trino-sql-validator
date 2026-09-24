@@ -30,6 +30,7 @@ FIXTURE_EXPECTATIONS = {
     "sqlparser_merge_example.sql": FixtureExpectation(True, 1),
     "trino_dbt_customers.sql": FixtureExpectation(True, 1),
     "trino_iris_queries.sql": FixtureExpectation(True, 18),
+    "trino_iceberg_parser_test.sql": FixtureExpectation(True, 247),
     "trino_recursive_transformed.sql": FixtureExpectation(True, 4),
     "trino_reports_optimize.sql": FixtureExpectation(True, 17),
     "trino_reports_tests_schema.sql": FixtureExpectation(True, 6),
@@ -49,6 +50,13 @@ FIXTURE_FEATURES = {
     "sqlparser_merge_example.sql": ("merge", "dml-branches"),
     "trino_dbt_customers.sql": ("legacy-jinja", "dbt", "cte"),
     "trino_iris_queries.sql": ("aggregate", "window", "filter", "map"),
+    "trino_iceberg_parser_test.sql": (
+        "iceberg",
+        "ddl",
+        "dml",
+        "sql-json",
+        "security",
+    ),
     "trino_recursive_transformed.sql": ("recursive-cte", "subquery", "array-cast"),
     "trino_reports_optimize.sql": ("session", "alter-execute", "iceberg"),
     "trino_reports_tests_schema.sql": ("nested-row", "hive", "call", "view"),
@@ -56,6 +64,40 @@ FIXTURE_FEATURES = {
     "trino_tpch_queries.sql": ("tpch", "join", "subquery", "ddl", "dml"),
     "valid_multi.sql": ("multi-statement", "select", "insert"),
 }
+
+
+def has_sql_content(sql: str) -> bool:
+    position = 0
+    block_depth = 0
+    line_comment = False
+    while position < len(sql):
+        if line_comment:
+            if sql[position] in "\r\n":
+                line_comment = False
+            position += 1
+            continue
+        if block_depth:
+            if sql.startswith("/*", position):
+                block_depth += 1
+                position += 2
+            elif sql.startswith("*/", position):
+                block_depth -= 1
+                position += 2
+            else:
+                position += 1
+            continue
+        if sql.startswith("--", position):
+            line_comment = True
+            position += 2
+            continue
+        if sql.startswith("/*", position):
+            block_depth = 1
+            position += 2
+            continue
+        if not sql[position].isspace():
+            return True
+        position += 1
+    return False
 
 
 def split_sql_statements(sql: str) -> list[str]:
@@ -144,7 +186,7 @@ def split_sql_statements(sql: str) -> list[str]:
             continue
         if sql[position] == ";" and routine_depth == 0:
             candidate = sql[start:position].strip()
-            if candidate and validate(candidate).statement_count:
+            if candidate and has_sql_content(candidate):
                 statements.append(candidate)
             start = position + 1
             words = []
@@ -152,7 +194,7 @@ def split_sql_statements(sql: str) -> list[str]:
             after_end = False
         position += 1
     candidate = sql[start:].strip()
-    if candidate and validate(candidate).statement_count:
+    if candidate and has_sql_content(candidate):
         statements.append(candidate)
     return statements
 
@@ -215,7 +257,7 @@ def test_positive_fixture_splitter_preserves_expected_statement_counts() -> None
     for filename, expected in FIXTURE_EXPECTATIONS.items():
         if expected.valid:
             assert actual.get(filename, 0) == expected.statement_count
-    assert len(POSITIVE_FIXTURE_STATEMENTS) == 276
+    assert len(POSITIVE_FIXTURE_STATEMENTS) == 523
 
 
 @pytest.mark.parametrize(
@@ -250,3 +292,11 @@ def test_fixture_splitter_handles_comments_dollar_bodies_and_routine_semicolons(
 
     assert len(statements) == 4
     assert all(validate(statement).valid for statement in statements)
+
+
+def test_fixture_splitter_does_not_hide_invalid_statements() -> None:
+    statements = split_sql_statements("SELECT 1; SELECT * FORM t; -- comments only")
+
+    assert len(statements) == 2
+    assert validate(statements[0]).valid
+    assert not validate(statements[1]).valid

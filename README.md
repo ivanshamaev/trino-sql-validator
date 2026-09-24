@@ -75,6 +75,21 @@ assert validate('SELECT orderdate AS "At"').warnings == ()
 `AT` is also used by the temporal operators `AT TIME ZONE` and `AT LOCAL`.
 Those operator forms do not produce alias warnings.
 
+Trino's 83 reserved keywords are stricter: an unquoted reserved alias is a
+syntax error, including after an explicit `AS`. Double quotes turn the word
+into a valid delimited identifier in aliases, object names, and column
+references; single quotes do not:
+
+```python
+assert not validate("SELECT 1 AS where").valid
+assert validate('SELECT 1 AS "where"').valid
+
+assert validate('CREATE TABLE dwh_team."FROM" AS SELECT 1 AS "ALTER"').valid
+assert validate(
+    'SELECT "FROM"."ALTER" FROM dwh_team."FROM" AS "FROM"'
+).valid
+```
+
 The catalogs are auto-generated from the Trino docs and only check *name
 existence*, not argument counts, precision/scale, or semantic correctness.
 `hive`/`generic` dialects skip these checks. False positives are possible if a
