@@ -433,10 +433,7 @@ fn validate_cte_as(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
         if !is_identifier(&tokens[name]) {
             continue;
         }
-        loop {
-            let Some(mut cursor) = next_significant(tokens, name + 1, tokens.len()) else {
-                break;
-            };
+        while let Some(mut cursor) = next_significant(tokens, name + 1, tokens.len()) {
             if tokens[cursor].token == Token::LParen {
                 let Some(close) = matching_rparen(tokens, cursor) else {
                     break;
@@ -5222,10 +5219,10 @@ fn validate_trino_ast(
                         }
                     }
                 }
-                DataType::Nullable(inner) | DataType::LowCardinality(inner) => {
-                    if self.validate_data_type(inner).is_break() {
-                        return ControlFlow::Break(());
-                    }
+                DataType::Nullable(inner) | DataType::LowCardinality(inner)
+                    if self.validate_data_type(inner).is_break() =>
+                {
+                    return ControlFlow::Break(());
                 }
                 _ => {}
             }
@@ -5641,10 +5638,8 @@ fn validate_trino_ast(
                         }
                     }
                 }
-                Expr::Cast { data_type, .. } => {
-                    if self.validate_data_type(data_type).is_break() {
-                        return ControlFlow::Break(());
-                    }
+                Expr::Cast { data_type, .. } if self.validate_data_type(data_type).is_break() => {
+                    return ControlFlow::Break(());
                 }
                 _ => {}
             }
