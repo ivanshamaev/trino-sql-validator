@@ -1,18 +1,23 @@
 # Trino SQL coverage and validation boundaries
 
-Status: v0.14.0 development baseline, Trino 483 pin.
+Status: v0.18.0, Trino 483 pin.
 
 ## Measured coverage
 
-- All 16 files in `tests/fixtures` have explicit outcome, statement-count,
-  warning, and feature-profile expectations. All 276 statements from positive
+- All 18 files in `tests/fixtures` have explicit outcome, statement-count,
+  warning, and feature-profile expectations. All 523 statements from positive
   non-empty fixtures are also validated independently.
+- `trino_invalid_sql.sql` contributes 236 independent parser-negative cases;
+  each is passed to `validate()` separately rather than as multi-statement SQL.
+  Trino 483 and v0.18.0 both reject all 236, compared with 201/236 rejections in
+  v0.17.0.
 - The 57-case composition matrix exercises query features under their supported
   root, EXPLAIN, PREPARE, CTAS, CREATE VIEW, and INSERT contexts.
 - The expanded pinned audit extracts ordinary Java strings and text blocks. It
-  currently accepts 476/484 Trino statements, 231/238 expressions, 68/68 types,
+  currently accepts 479/484 Trino statements, 231/238 expressions, 68/68 types,
   one Functions statement, five Routines statements, and one standalone function
-  specification. It rejects 23/23 direct negative statements.
+  specification. It rejects 23/23 direct negative statements and 52/55
+  statement error-suite inputs; the retained differences are baseline-approved.
 - Known audit differences are identified by content hash in
   `trino_483_audit_baseline.json`. A new mismatch or a smaller extracted corpus
   fails `--fail-on-regression`; PrestoDB remains comparison-only.
@@ -38,8 +43,10 @@ The Trino layer includes current catalog/branch/role/privilege/session statement
 nested ALTER operations, SQL routines, CALL and table EXECUTE structure, materialized
 view options, table functions, SQL/JSON, MATCH_RECOGNIZE, PIVOT, NEAREST,
 CORRESPONDING, inline WITH FUNCTION, WITH SESSION, Iceberg branches/time travel,
-and nested ROW/ARRAY/MAP types. Negative neighbors are retained for permissive
-Generic grammar that Trino does not support.
+and nested ROW/ARRAY/MAP types. Located guards additionally enforce Trino's exact
+FETCH, current-value, EXPLAIN, CTE, SQL/JSON, row-pattern, and delimiter shapes.
+Negative neighbors are retained for permissive Generic grammar that Trino does
+not support.
 
 ## Function and type warnings
 

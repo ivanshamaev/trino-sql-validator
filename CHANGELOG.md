@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-09-25
+
+### Added
+
+- Added a 236-case independently executed invalid-SQL fixture contract; every
+  case is confirmed invalid by the Trino 483 parser and must return an invalid
+  result without warnings.
+- Added focused Rust and Python regressions for parser-special functions,
+  statement delimiters, reserved identifier roles, current-value expressions,
+  row-pattern quantifiers, and source-located structural errors.
+
+### Fixed
+
+- Rejected 35 confirmed syntax false accepts, including trailing projection
+  commas, missing JOIN criteria and DML keywords, malformed FETCH/SQL-JSON/
+  MATCH_RECOGNIZE forms, unsupported operators and literals, invalid prepared
+  statements, and empty statement segments.
+- Enforced Trino reserved words in relation, column-definition, column-reference,
+  dereference, DDL object, prepared-statement, routine, row-field, `JOIN USING`,
+  and function-name roles while preserving every double-quoted form.
+- Matched Trino parser-time rules for `IF`, `NULLIF`, `COALESCE`, `TRY`, and
+  `FORMAT`, including row-pattern processing modes and qualified wildcards,
+  without introducing general function signature validation.
+- Checked every CTE in a `WITH` list and validated `MATCH_RECOGNIZE` measure
+  aliases structurally, avoiding false rejects for non-reserved words inside
+  measure expressions.
+- Required source locations for 234/236 independent negative cases; the two
+  locationless cases are explicitly documented upstream-parser limitations.
+- Accepted row-pattern `{,}` / `{,}?`, `EXECUTE IMMEDIATE`, `GROUP BY AUTO`,
+  `OFFSET ... FETCH`, and `OVER` as a contextual implicit projection alias;
+  the latter now produces the existing non-fatal `AliasWarning`.
+
 ## [0.17.0] - 2026-09-24
 
 ### Fixed

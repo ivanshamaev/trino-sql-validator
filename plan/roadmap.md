@@ -120,6 +120,19 @@
 
 Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
 
+## v0.15.0–v0.18.0 — catalogs, aliases, and negative parser fidelity
+
+- v0.15.0 completed the documented built-in function catalog edge cases.
+- v0.16.0 introduced non-fatal warnings for ambiguous contextual aliases.
+- v0.17.0 enforced the Trino 483 reserved-word contract for aliases while
+  preserving double-quoted identifiers and all documented non-reserved aliases.
+- v0.18.0 added a 236-case independent invalid-SQL corpus and closed all 35
+  confirmed false accepts. The Trino path now enforces parser-time function
+  forms, statement and join boundaries, exact located clause shapes, reserved
+  identifiers outside aliases, and empty top-level statement segments. Positive
+  compatibility includes `{,}` row-pattern quantifiers, `GROUP BY AUTO`, and
+  contextual `OVER` aliases; Generic and Hive behavior remains unchanged.
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.

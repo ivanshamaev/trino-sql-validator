@@ -1,10 +1,13 @@
 use sqlparser::ast::{
     CreateFunction, CreateFunctionBody, Expr, FunctionCalledOnNull, FunctionDeterminismSpecifier,
-    FunctionReturnType, FunctionSecurity, OperateFunctionArg, Statement, UnaryOperator, Value,
+    FunctionReturnType, FunctionSecurity, Ident, ObjectName, OperateFunctionArg, Statement,
+    UnaryOperator, Value,
 };
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
+
+use crate::dialects::trino_keywords;
 
 /// Trino-only SQL statements that `sqlparser` has no AST for.
 ///
@@ -240,6 +243,30 @@ fn consume_word(p: &mut Parser, word: &str) -> bool {
     }
 }
 
+fn validate_trino_ident(ident: &Ident) -> Result<(), ParserError> {
+    if ident.quote_style.is_none() && trino_keywords::is_reserved_word(&ident.value) {
+        return Err(ParserError::ParserError(format!(
+            "reserved keyword '{}' cannot be used as an unquoted Trino identifier at Line: {}, Column: {}",
+            ident.value, ident.span.start.line, ident.span.start.column
+        )));
+    }
+    Ok(())
+}
+
+fn parse_trino_identifier(p: &mut Parser) -> Result<Ident, ParserError> {
+    let ident = p.parse_identifier()?;
+    validate_trino_ident(&ident)?;
+    Ok(ident)
+}
+
+fn parse_trino_object_name(p: &mut Parser) -> Result<ObjectName, ParserError> {
+    let name = p.parse_object_name(true)?;
+    for ident in name.0.iter().filter_map(|part| part.as_ident()) {
+        validate_trino_ident(ident)?;
+    }
+    Ok(name)
+}
+
 fn end_of_statement(p: &mut Parser) -> Result<(), ParserError> {
     match p.peek_token_ref().token.clone() {
         Token::EOF | Token::SemiColon => Ok(()),
@@ -260,7 +287,7 @@ fn parse_properties(p: &mut Parser, parenthesized: bool) -> Result<(), ParserErr
         ));
     }
     loop {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         p.expect_token(&Token::Eq)?;
         if !consume_word(p, "default") {
             p.parse_expr()?;
@@ -325,7 +352,7 @@ fn parse_reset_session(p: &mut Parser) -> Result<Statement, ParserError> {
             p.next_token();
         }
         _ => {
-            p.parse_object_name(true)?;
+            parse_trino_object_name(p)?;
         }
     }
     end_of_statement(p)?;
@@ -344,7 +371,7 @@ fn parse_set_path(p: &mut Parser) -> Result<Statement, ParserError> {
 }
 
 fn parse_path_element(p: &mut Parser) -> Result<(), ParserError> {
-    let path = p.parse_object_name(true)?;
+    let path = parse_trino_object_name(p)?;
     if path.0.len() > 2 {
         return Err(ParserError::ParserError(
             "Trino path element has at most catalog and schema".into(),
@@ -369,7 +396,7 @@ fn parse_set_session_authorization(p: &mut Parser) -> Result<Statement, ParserEr
             ));
         }
         _ => {
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
         }
     }
     end_of_statement(p)?;
@@ -380,10 +407,10 @@ fn parse_set_role(p: &mut Parser) -> Result<Statement, ParserError> {
     p.expect_keyword(Keyword::SET)?;
     p.expect_keyword(Keyword::ROLE)?;
     if !(opt_kw(p, Keyword::ALL) || opt_kw(p, Keyword::NONE)) {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     if opt_kw(p, Keyword::IN) {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     end_of_statement(p)?;
     Ok(placeholder())
@@ -396,7 +423,7 @@ fn parse_show_create(p: &mut Parser) -> Result<Statement, ParserError> {
         p.expect_keyword(Keyword::MATERIALIZED)?;
         p.expect_keyword(Keyword::VIEW)?;
     }
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     end_of_statement(p)?;
     Ok(placeholder())
 }
@@ -446,9 +473,9 @@ fn parse_required_show_scope(p: &mut Parser, qualified: bool) -> Result<(), Pars
 
 fn parse_show_scope(p: &mut Parser, qualified: bool) -> Result<(), ParserError> {
     if qualified {
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
     } else {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     Ok(())
 }
@@ -484,7 +511,7 @@ fn parse_describe(p: &mut Parser) -> Result<Statement, ParserError> {
         p.expect_token(&Token::RParen)?;
         Some(query)
     } else {
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
         None
     };
     if opt_kw(p, Keyword::WHERE) {
@@ -498,7 +525,7 @@ fn parse_refresh_materialized_view(p: &mut Parser) -> Result<Statement, ParserEr
     p.expect_keyword(Keyword::REFRESH)?;
     p.expect_keyword(Keyword::MATERIALIZED)?;
     p.expect_keyword(Keyword::VIEW)?;
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     end_of_statement(p)?;
     Ok(placeholder())
 }
@@ -535,9 +562,9 @@ fn parse_create_catalog(p: &mut Parser) -> Result<Statement, ParserError> {
         p.expect_keyword(Keyword::NOT)?;
         p.expect_keyword(Keyword::EXISTS)?;
     }
-    p.parse_identifier()?;
+    parse_trino_identifier(p)?;
     p.expect_keyword(Keyword::USING)?;
-    p.parse_identifier()?;
+    parse_trino_identifier(p)?;
     if opt_kw(p, Keyword::COMMENT) {
         parse_trino_string(p)?;
     }
@@ -567,7 +594,7 @@ fn parse_principal(p: &mut Parser) -> Result<(), ParserError> {
     if !opt_kw(p, Keyword::USER) {
         opt_kw(p, Keyword::ROLE);
     }
-    p.parse_identifier()?;
+    parse_trino_identifier(p)?;
     Ok(())
 }
 
@@ -579,13 +606,13 @@ fn parse_grantor(p: &mut Parser) -> Result<(), ParserError> {
 }
 
 fn parse_create_role(p: &mut Parser) -> Result<Statement, ParserError> {
-    p.parse_identifier()?;
+    parse_trino_identifier(p)?;
     if opt_kw(p, Keyword::WITH) {
         p.expect_keyword(Keyword::ADMIN)?;
         parse_grantor(p)?;
     }
     if opt_kw(p, Keyword::IN) {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     end_of_statement(p)?;
     Ok(placeholder())
@@ -599,7 +626,7 @@ fn parse_routine_arguments(p: &mut Parser) -> Result<Vec<OperateFunctionArg>, Pa
     }
     loop {
         let named = p.maybe_parse(|p| {
-            let name = p.parse_identifier()?;
+            let name = parse_trino_identifier(p)?;
             let data_type = p.parse_data_type()?;
             if !matches!(p.peek_token_ref().token, Token::Comma | Token::RParen) {
                 return Err(ParserError::ParserError(
@@ -665,9 +692,9 @@ fn parse_variable_declaration(
     arguments: &mut Vec<OperateFunctionArg>,
     expressions: &mut Vec<Expr>,
 ) -> Result<(), ParserError> {
-    let mut names = vec![p.parse_identifier()?];
+    let mut names = vec![parse_trino_identifier(p)?];
     while p.consume_token(&Token::Comma) {
-        names.push(p.parse_identifier()?);
+        names.push(parse_trino_identifier(p)?);
     }
     let data_type = p.parse_data_type()?;
     if consume_word(p, "default") {
@@ -689,7 +716,7 @@ fn consume_control_label(p: &mut Parser) -> Result<(), ParserError> {
     if matches!(p.peek_token_ref().token, Token::Word(_))
         && p.peek_nth_token(1).token == Token::Colon
     {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         p.expect_token(&Token::Colon)?;
     }
     Ok(())
@@ -705,13 +732,13 @@ fn parse_control_statement(
         return Ok(());
     }
     if consume_word(p, "set") {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         p.expect_token(&Token::Eq)?;
         expressions.push(p.parse_expr()?);
         return Ok(());
     }
     if consume_word(p, "iterate") || consume_word(p, "leave") {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         return Ok(());
     }
     if consume_word(p, "begin") {
@@ -822,7 +849,7 @@ fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
         opt_kw(p, Keyword::TEMP)
     };
     p.expect_keyword(Keyword::FUNCTION)?;
-    let name = p.parse_object_name(true)?;
+    let name = parse_trino_object_name(p)?;
     let mut args = parse_routine_arguments(p)?;
     p.expect_keyword(Keyword::RETURNS)?;
     let return_type = p.parse_data_type()?;
@@ -867,7 +894,7 @@ fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
                     "duplicate LANGUAGE routine characteristic".into(),
                 ));
             }
-            language = Some(p.parse_identifier()?);
+            language = Some(parse_trino_identifier(p)?);
             continue;
         }
         if consume_word(p, "not") {
@@ -991,15 +1018,15 @@ fn parse_create_branch(p: &mut Parser, or_replace: bool) -> Result<Statement, Pa
             "CREATE BRANCH cannot combine OR REPLACE with IF NOT EXISTS".into(),
         ));
     }
-    p.parse_identifier()?;
+    parse_trino_identifier(p)?;
     if opt_kw(p, Keyword::WITH) {
         parse_properties(p, true)?;
     }
     p.expect_keyword(Keyword::IN)?;
     p.expect_keyword(Keyword::TABLE)?;
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     if opt_kw(p, Keyword::FROM) {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     end_of_statement(p)?;
     Ok(placeholder())
@@ -1028,21 +1055,21 @@ fn parse_drop(p: &mut Parser) -> Result<Statement, ParserError> {
     }
     match kind {
         DropKind::Catalog => {
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
             if !opt_kw(p, Keyword::CASCADE) {
                 opt_kw(p, Keyword::RESTRICT);
             }
         }
         DropKind::Branch => {
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
             p.expect_keyword(Keyword::IN)?;
             p.expect_keyword(Keyword::TABLE)?;
-            p.parse_object_name(true)?;
+            parse_trino_object_name(p)?;
         }
         DropKind::Role => {
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
             if opt_kw(p, Keyword::IN) {
-                p.parse_identifier()?;
+                parse_trino_identifier(p)?;
             }
         }
     }
@@ -1065,8 +1092,8 @@ fn parse_alter(p: &mut Parser) -> Result<Statement, ParserError> {
     if consume_word(p, "branch") {
         return parse_alter_branch(p);
     }
-    p.parse_identifier()?;
-    p.parse_object_name(true)?;
+    parse_trino_identifier(p)?;
+    parse_trino_object_name(p)?;
     p.expect_keyword(Keyword::SET)?;
     p.expect_keyword(Keyword::AUTHORIZATION)?;
     parse_principal(p)?;
@@ -1081,18 +1108,18 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
     } else {
         false
     };
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     if opt_kw(p, Keyword::RENAME) {
         if opt_kw(p, Keyword::COLUMN) {
             if opt_kw(p, Keyword::IF) {
                 p.expect_keyword(Keyword::EXISTS)?;
             }
-            p.parse_object_name(true)?;
+            parse_trino_object_name(p)?;
             p.expect_keyword(Keyword::TO)?;
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
         } else {
             p.expect_keyword(Keyword::TO)?;
-            p.parse_object_name(true)?;
+            parse_trino_object_name(p)?;
         }
     } else if opt_kw(p, Keyword::ADD) {
         p.expect_keyword(Keyword::COLUMN)?;
@@ -1100,21 +1127,21 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
             p.expect_keyword(Keyword::NOT)?;
             p.expect_keyword(Keyword::EXISTS)?;
         }
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
         p.parse_data_type()?;
         parse_column_options(p)?;
         if !(opt_kw(p, Keyword::FIRST) || consume_word(p, "last")) && opt_kw(p, Keyword::AFTER) {
-            p.parse_identifier()?;
+            parse_trino_identifier(p)?;
         }
     } else if opt_kw(p, Keyword::DROP) {
         p.expect_keyword(Keyword::COLUMN)?;
         if opt_kw(p, Keyword::IF) {
             p.expect_keyword(Keyword::EXISTS)?;
         }
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
     } else if opt_kw(p, Keyword::ALTER) {
         p.expect_keyword(Keyword::COLUMN)?;
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
         parse_alter_column_action(p)?;
     } else if opt_kw(p, Keyword::SET) {
         if consume_word(p, "properties") {
@@ -1137,7 +1164,7 @@ fn parse_alter_table(p: &mut Parser) -> Result<Statement, ParserError> {
                 "ALTER TABLE EXECUTE does not support IF EXISTS".into(),
             ));
         }
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         parse_optional_execute_arguments(p)?;
         if opt_kw(p, Keyword::WHERE) {
             p.parse_expr()?;
@@ -1236,10 +1263,10 @@ fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserErro
     } else {
         false
     };
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     if opt_kw(p, Keyword::RENAME) {
         p.expect_keyword(Keyword::TO)?;
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
     } else if opt_kw(p, Keyword::SET) {
         if consume_word(p, "properties") {
             if if_exists {
@@ -1256,7 +1283,7 @@ fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserErro
             ));
         }
     } else if opt_kw(p, Keyword::EXECUTE) {
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
         parse_optional_execute_arguments(p)?;
         if opt_kw(p, Keyword::WHERE) {
             p.parse_expr()?;
@@ -1271,10 +1298,10 @@ fn parse_alter_materialized_view(p: &mut Parser) -> Result<Statement, ParserErro
 }
 
 fn parse_alter_view(p: &mut Parser) -> Result<Statement, ParserError> {
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     if opt_kw(p, Keyword::RENAME) {
         p.expect_keyword(Keyword::TO)?;
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
     } else if opt_kw(p, Keyword::REFRESH) {
         // ALTER VIEW name REFRESH — nothing else to consume
     } else if opt_kw(p, Keyword::SET) {
@@ -1295,14 +1322,14 @@ fn parse_alter_view(p: &mut Parser) -> Result<Statement, ParserError> {
 }
 
 fn parse_alter_branch(p: &mut Parser) -> Result<Statement, ParserError> {
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     if opt_kw(p, Keyword::IN) {
         p.expect_keyword(Keyword::TABLE)?;
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
         consume_word(p, "fast");
         consume_word(p, "forward");
         p.expect_keyword(Keyword::TO)?;
-        p.parse_object_name(true)?;
+        parse_trino_object_name(p)?;
     } else if opt_kw(p, Keyword::SET) {
         if !consume_word(p, "retention") {
             return Err(ParserError::ParserError(
@@ -1356,7 +1383,7 @@ fn has_top_level_word_before(p: &Parser, expected: &str, boundary: &str) -> bool
 
 fn parse_identifier_list(p: &mut Parser) -> Result<(), ParserError> {
     loop {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         if !p.consume_token(&Token::Comma) {
             return Ok(());
         }
@@ -1396,7 +1423,7 @@ fn parse_privilege_list(p: &mut Parser) -> Result<(), ParserError> {
 
 fn parse_grant_object(p: &mut Parser) -> Result<(), ParserError> {
     if consume_word(p, "branch") {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
         p.expect_keyword(Keyword::IN)?;
     }
     let known_kind = if opt_kw(p, Keyword::MATERIALIZED) {
@@ -1416,7 +1443,7 @@ fn parse_grant_object(p: &mut Parser) -> Result<(), ParserError> {
     {
         p.next_token();
     }
-    p.parse_object_name(true)?;
+    parse_trino_object_name(p)?;
     Ok(())
 }
 
@@ -1426,7 +1453,7 @@ fn parse_optional_grantor_and_catalog(p: &mut Parser) -> Result<(), ParserError>
         parse_grantor(p)?;
     }
     if opt_kw(p, Keyword::IN) {
-        p.parse_identifier()?;
+        parse_trino_identifier(p)?;
     }
     Ok(())
 }

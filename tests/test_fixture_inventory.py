@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,8 @@ class FixtureExpectation:
     statement_count: int
     warning_names: tuple[str, ...] = ()
     error_fragment: str | None = None
+    independent_invalid: bool = False
+    case_count: int | None = None
 
 
 FIXTURE_EXPECTATIONS = {
@@ -31,6 +34,9 @@ FIXTURE_EXPECTATIONS = {
     "trino_dbt_customers.sql": FixtureExpectation(True, 1),
     "trino_iris_queries.sql": FixtureExpectation(True, 18),
     "trino_iceberg_parser_test.sql": FixtureExpectation(True, 247),
+    "trino_invalid_sql.sql": FixtureExpectation(
+        False, 0, independent_invalid=True, case_count=236
+    ),
     "trino_recursive_transformed.sql": FixtureExpectation(True, 4),
     "trino_reports_optimize.sql": FixtureExpectation(True, 17),
     "trino_reports_tests_schema.sql": FixtureExpectation(True, 6),
@@ -57,6 +63,7 @@ FIXTURE_FEATURES = {
         "sql-json",
         "security",
     ),
+    "trino_invalid_sql.sql": ("negative", "independent-statements", "trino"),
     "trino_recursive_transformed.sql": ("recursive-cte", "subquery", "array-cast"),
     "trino_reports_optimize.sql": ("session", "alter-execute", "iceberg"),
     "trino_reports_tests_schema.sql": ("nested-row", "hive", "call", "view"),
@@ -215,6 +222,32 @@ POSITIVE_STATEMENT_WARNING_NAMES = {
 }
 
 
+def independent_invalid_fixture_cases(filename: str) -> list[str]:
+    sql = (FIXTURES / filename).read_text(encoding="utf-8")
+    cases: list[str] = []
+    for block in re.split(r"(?:\r?\n)[ \t]*(?:\r?\n)+", sql):
+        lines = block.splitlines(keepends=True)
+        while lines and lines[0].lstrip().startswith("--"):
+            lines.pop(0)
+        case = "".join(lines).strip("\r\n")
+        if case.strip():
+            cases.append(case)
+    return cases
+
+
+INDEPENDENT_INVALID_CASES = [
+    (filename, index, sql)
+    for filename, expected in FIXTURE_EXPECTATIONS.items()
+    if expected.independent_invalid
+    for index, sql in enumerate(independent_invalid_fixture_cases(filename), 1)
+]
+
+LOCATIONLESS_UPSTREAM_PARSER_CASES = {
+    ("trino_invalid_sql.sql", 97),
+    ("trino_invalid_sql.sql", 202),
+}
+
+
 def test_every_sql_fixture_has_an_explicit_expectation() -> None:
     actual = {path.name for path in FIXTURES.glob("*.sql")}
     assert actual == FIXTURE_EXPECTATIONS.keys()
@@ -231,6 +264,11 @@ def test_every_sql_fixture_has_an_explicit_feature_profile() -> None:
     ids=FIXTURE_EXPECTATIONS,
 )
 def test_sql_fixture_contract(filename: str, expected: FixtureExpectation) -> None:
+    if expected.independent_invalid:
+        cases = independent_invalid_fixture_cases(filename)
+        assert len(cases) == expected.case_count
+        return
+
     result = validate_file(FIXTURES / filename)
 
     assert result.valid is expected.valid
@@ -274,6 +312,31 @@ def test_every_positive_fixture_statement_independently(
     assert result.statement_count == 1
     expected_warnings = POSITIVE_STATEMENT_WARNING_NAMES.get((filename, statement_index), ())
     assert tuple(warning.name for warning in result.warnings) == expected_warnings
+
+
+@pytest.mark.parametrize(
+    ("filename", "case_index", "sql"),
+    INDEPENDENT_INVALID_CASES,
+    ids=[
+        f"{filename}::{case_index:03d}"
+        for filename, case_index, _ in INDEPENDENT_INVALID_CASES
+    ],
+)
+def test_every_independent_invalid_fixture_case(
+    filename: str, case_index: int, sql: str
+) -> None:
+    result = validate(sql, dialect="trino")
+
+    assert not result.valid, f"{filename}::{case_index:03d}: unexpectedly valid\n{sql}"
+    assert result.statement_count == 0
+    assert result.error is not None
+    assert result.error.message
+    assert result.warnings == ()
+    if (filename, case_index) not in LOCATIONLESS_UPSTREAM_PARSER_CASES:
+        assert result.error.line is not None
+        assert result.error.line > 0
+        assert result.error.column is not None
+        assert result.error.column > 0
 
 
 def test_fixture_splitter_handles_comments_dollar_bodies_and_routine_semicolons() -> None:

@@ -1,9 +1,11 @@
 use core::ops::ControlFlow;
 use std::cmp::Reverse;
 
-use sqlparser::ast::{BinaryOperator, ColumnOption, FunctionArg};
+use sqlparser::ast::{ArrayElemTypeDef, BinaryOperator, ColumnOption, DataType, FromTable};
 use sqlparser::ast::{Expr, FunctionArgExpr, FunctionArgOperator, FunctionArguments, Ident};
-use sqlparser::ast::{LimitClause, Query, Select, SelectItem, Statement, TableAlias, TableFactor};
+use sqlparser::ast::{FunctionArg, FunctionReturnType, ObjectName, SchemaName, Spanned};
+use sqlparser::ast::{JoinConstraint, JoinOperator, LimitClause, Query, Select, SelectItem};
+use sqlparser::ast::{Statement, TableAlias, TableFactor};
 use sqlparser::ast::{TableSampleKind, TableSampleMethod};
 use sqlparser::ast::{UnaryOperator, Value, Visit, Visitor};
 use sqlparser::dialect::{Dialect, GenericDialect};
@@ -298,6 +300,532 @@ fn validate_balanced_groups(tokens: &[TokenWithSpan]) -> Result<(), ParserError>
     if let Some((token, _)) = groups.pop() {
         return Err(syntax_error(token, "unterminated group"));
     }
+    Ok(())
+}
+
+fn validate_trino_lexical_tokens(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for (index, token) in tokens.iter().enumerate() {
+        match &token.token {
+            Token::DoubleEq => {
+                return Err(syntax_error(
+                    token,
+                    "Trino does not support the == operator",
+                ));
+            }
+            Token::Placeholder(value) if value.starts_with('$') => {
+                return Err(syntax_error(token, "Trino does not support $ placeholders"));
+            }
+            Token::HexStringLiteral(value) => {
+                let compact_span = token.span.start.line == token.span.end.line
+                    && token
+                        .span
+                        .end
+                        .column
+                        .saturating_sub(token.span.start.column)
+                        == value.chars().count() as u64 + 2;
+                let non_decimal_integer = compact_span
+                    || previous_significant(tokens, index).is_some_and(|previous| {
+                        matches!(&tokens[previous].token, Token::Number(number, false) if number == "0")
+                            && tokens[previous].span.end == token.span.start
+                    });
+                if non_decimal_integer {
+                    continue;
+                }
+                let digits = value.chars().filter(|character| !character.is_whitespace());
+                if digits
+                    .clone()
+                    .any(|character| !character.is_ascii_hexdigit())
+                    || digits.count() % 2 != 0
+                {
+                    return Err(syntax_error(
+                        token,
+                        "Trino binary literals require an even number of hexadecimal digits",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_empty_statement_segments(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    let significant: Vec<&TokenWithSpan> = tokens
+        .iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_) | Token::EOF))
+        .collect();
+    let mut segment_has_content = false;
+    let mut group_depth = 0usize;
+    let mut routine = false;
+    let mut routine_controls: Vec<String> = Vec::new();
+    let mut after_end = false;
+    let mut segment_start = 0usize;
+
+    for (index, token) in significant.iter().enumerate() {
+        match &token.token {
+            Token::LParen | Token::LBracket | Token::LBrace => group_depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                group_depth = group_depth.saturating_sub(1);
+            }
+            Token::Word(word) if word.quote_style.is_none() => {
+                let value = word.value.to_ascii_lowercase();
+                if index.saturating_sub(segment_start) < 5 && value == "function" {
+                    routine = significant[segment_start..index].iter().any(|candidate| {
+                        matches!(&candidate.token, Token::Word(word) if word.value.eq_ignore_ascii_case("create"))
+                    });
+                }
+                if routine {
+                    if value == "end" {
+                        routine_controls.pop();
+                        after_end = true;
+                    } else if ["begin", "case", "if", "loop", "repeat", "while"]
+                        .contains(&value.as_str())
+                    {
+                        let next_is_group = significant
+                            .get(index + 1)
+                            .is_some_and(|next| next.token == Token::LParen);
+                        if after_end {
+                            after_end = false;
+                        } else if value == "begin"
+                            || (!next_is_group && !routine_controls.is_empty())
+                        {
+                            routine_controls.push(value);
+                        }
+                    } else if after_end {
+                        after_end = false;
+                    }
+                }
+                segment_has_content = true;
+            }
+            Token::SemiColon if group_depth == 0 && (!routine || routine_controls.is_empty()) => {
+                if !segment_has_content {
+                    return Err(syntax_error(token, "empty SQL statement is not allowed"));
+                }
+                segment_has_content = false;
+                segment_start = index + 1;
+                routine = false;
+                after_end = false;
+            }
+            _ => segment_has_content = true,
+        }
+    }
+    Ok(())
+}
+
+fn validate_cte_as(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for with in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[with], "with") {
+            continue;
+        }
+        let Some(mut name) = next_significant(tokens, with + 1, tokens.len()) else {
+            continue;
+        };
+        if is_unquoted_word(&tokens[name], "session") || is_unquoted_word(&tokens[name], "function")
+        {
+            continue;
+        }
+        if is_unquoted_word(&tokens[name], "recursive") {
+            let Some(next) = next_significant(tokens, name + 1, tokens.len()) else {
+                continue;
+            };
+            name = next;
+        }
+        if !is_identifier(&tokens[name]) {
+            continue;
+        }
+        loop {
+            let Some(mut cursor) = next_significant(tokens, name + 1, tokens.len()) else {
+                break;
+            };
+            if tokens[cursor].token == Token::LParen {
+                let Some(close) = matching_rparen(tokens, cursor) else {
+                    break;
+                };
+                let body_without_as =
+                    next_significant(tokens, cursor + 1, close).is_some_and(|first| {
+                        ["select", "table", "values", "with"]
+                            .iter()
+                            .any(|word| is_unquoted_word(&tokens[first], word))
+                    });
+                if body_without_as {
+                    return Err(syntax_error(&tokens[cursor], "Trino CTE query requires AS"));
+                }
+                let Some(after_columns) = next_significant(tokens, close + 1, tokens.len()) else {
+                    break;
+                };
+                cursor = after_columns;
+            }
+            if !is_unquoted_word(&tokens[cursor], "as") {
+                if tokens[cursor].token == Token::LParen
+                    && matching_rparen(tokens, cursor).is_some_and(|close| {
+                        next_significant(tokens, cursor + 1, close).is_some_and(|first| {
+                            ["select", "table", "values", "with"]
+                                .iter()
+                                .any(|word| is_unquoted_word(&tokens[first], word))
+                        })
+                    })
+                {
+                    return Err(syntax_error(&tokens[cursor], "Trino CTE query requires AS"));
+                }
+                break;
+            }
+            let Some(open) = next_significant(tokens, cursor + 1, tokens.len()) else {
+                break;
+            };
+            if tokens[open].token != Token::LParen {
+                break;
+            }
+            let Some(close) = matching_rparen(tokens, open) else {
+                break;
+            };
+            let Some(comma) = next_significant(tokens, close + 1, tokens.len()) else {
+                break;
+            };
+            if tokens[comma].token != Token::Comma {
+                break;
+            }
+            let Some(next_name) = next_significant(tokens, comma + 1, tokens.len()) else {
+                break;
+            };
+            if !is_identifier(&tokens[next_name]) {
+                break;
+            }
+            name = next_name;
+        }
+    }
+    Ok(())
+}
+
+fn validate_fetch_clauses(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for fetch in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[fetch], "fetch") {
+            continue;
+        }
+        let invalid = || syntax_error(&tokens[fetch], "invalid Trino FETCH clause");
+        let Some(mut cursor) = next_significant(tokens, fetch + 1, tokens.len()) else {
+            continue;
+        };
+        if !is_unquoted_word(&tokens[cursor], "first") && !is_unquoted_word(&tokens[cursor], "next")
+        {
+            continue;
+        }
+        cursor = next_significant(tokens, cursor + 1, tokens.len()).ok_or_else(invalid)?;
+        let is_count = matches!(&tokens[cursor].token, Token::Number(value, false) if !value.contains(['.', 'e', 'E']))
+            || matches!(&tokens[cursor].token, Token::Placeholder(value) if value == "?");
+        if is_count {
+            cursor = next_significant(tokens, cursor + 1, tokens.len()).ok_or_else(invalid)?;
+        }
+        if !is_unquoted_word(&tokens[cursor], "row") && !is_unquoted_word(&tokens[cursor], "rows") {
+            return Err(syntax_error(
+                &tokens[cursor],
+                "Trino FETCH requires ROW or ROWS",
+            ));
+        }
+        cursor = next_significant(tokens, cursor + 1, tokens.len()).ok_or_else(invalid)?;
+        if is_unquoted_word(&tokens[cursor], "only") {
+            continue;
+        }
+        if !is_unquoted_word(&tokens[cursor], "with") {
+            return Err(syntax_error(
+                &tokens[cursor],
+                "Trino FETCH requires ONLY or WITH TIES",
+            ));
+        }
+        let ties = next_significant(tokens, cursor + 1, tokens.len()).ok_or_else(invalid)?;
+        if !is_unquoted_word(&tokens[ties], "ties") {
+            return Err(syntax_error(
+                &tokens[ties],
+                "Trino FETCH requires WITH TIES",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_json_value_invocations(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for function in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[function], "json_value") {
+            continue;
+        }
+        if previous_significant(tokens, function)
+            .is_some_and(|previous| tokens[previous].token == Token::Period)
+        {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, function + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let comma = (open + 1..close).find(|index| match tokens[*index].token {
+            Token::LParen | Token::LBracket | Token::LBrace => {
+                depth += 1;
+                false
+            }
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            Token::Comma if depth == 0 => true,
+            _ => false,
+        });
+        let Some(comma) = comma else {
+            return Err(syntax_error(
+                &tokens[open],
+                "JSON_VALUE requires a JSON path argument",
+            ));
+        };
+        let Some(path) = next_significant(tokens, comma + 1, close) else {
+            return Err(syntax_error(
+                &tokens[comma],
+                "JSON_VALUE requires a JSON path string",
+            ));
+        };
+        if !matches!(
+            tokens[path].token,
+            Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_)
+        ) {
+            return Err(syntax_error(
+                &tokens[path],
+                "JSON_VALUE requires a JSON path string",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_with_ordinality(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for ordinality in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[ordinality], "ordinality") {
+            continue;
+        }
+        let Some(with) = previous_significant(tokens, ordinality)
+            .filter(|with| is_unquoted_word(&tokens[*with], "with"))
+        else {
+            continue;
+        };
+        let valid = previous_significant(tokens, with)
+            .filter(|close| tokens[*close].token == Token::RParen)
+            .and_then(|close| matching_lparen(tokens, close))
+            .and_then(|open| previous_significant(tokens, open))
+            .is_some_and(|function| is_unquoted_word(&tokens[function], "unnest"));
+        if !valid {
+            return Err(syntax_error(
+                &tokens[ordinality],
+                "WITH ORDINALITY is only valid after UNNEST",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_explain_options(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for explain in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[explain], "explain") {
+            continue;
+        }
+        let start = statement_start(tokens, explain);
+        if next_significant(tokens, start, tokens.len()) != Some(explain) {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, explain + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        for option in open + 1..close {
+            if !is_unquoted_word(&tokens[option], "type") {
+                continue;
+            }
+            let Some(value) = next_significant(tokens, option + 1, close) else {
+                return Err(syntax_error(
+                    &tokens[option],
+                    "EXPLAIN TYPE requires a value",
+                ));
+            };
+            if !["logical", "distributed", "validate", "io"]
+                .iter()
+                .any(|word| is_unquoted_word(&tokens[value], word))
+            {
+                return Err(syntax_error(&tokens[value], "invalid Trino EXPLAIN TYPE"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_show_statements(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    let allowed = [
+        "branches",
+        "catalogs",
+        "columns",
+        "create",
+        "current",
+        "functions",
+        "grants",
+        "role",
+        "roles",
+        "schemas",
+        "session",
+        "stats",
+        "tables",
+    ];
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        if let Some(show) = next_significant(tokens, start, end) {
+            if is_unquoted_word(&tokens[show], "show") {
+                let Some(object) = next_significant(tokens, show + 1, end) else {
+                    return Err(syntax_error(&tokens[show], "SHOW requires an object"));
+                };
+                if !allowed
+                    .iter()
+                    .any(|word| is_unquoted_word(&tokens[object], word))
+                {
+                    return Err(syntax_error(&tokens[object], "unsupported Trino SHOW form"));
+                }
+            }
+        }
+        start = end.saturating_add(1);
+    }
+    Ok(())
+}
+
+fn validate_current_values(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for current in 0..tokens.len() {
+        let name = [
+            "current_date",
+            "current_time",
+            "current_timestamp",
+            "localtime",
+            "localtimestamp",
+        ]
+        .iter()
+        .find(|name| is_unquoted_word(&tokens[current], name));
+        let Some(name) = name else {
+            continue;
+        };
+        if previous_significant(tokens, current)
+            .is_some_and(|previous| tokens[previous].token == Token::Period)
+        {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, current + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        if *name == "current_date" {
+            return Err(syntax_error(
+                &tokens[open],
+                "CURRENT_DATE does not accept a precision",
+            ));
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        let Some(precision) = next_significant(tokens, open + 1, close) else {
+            return Err(syntax_error(
+                &tokens[open],
+                "current time precision requires one integer",
+            ));
+        };
+        if !matches!(&tokens[precision].token, Token::Number(value, false) if !value.contains(['.', 'e', 'E']))
+            || next_significant(tokens, precision + 1, close).is_some()
+        {
+            return Err(syntax_error(
+                &tokens[precision],
+                "current time precision requires one integer",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_interval_qualifiers(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for interval in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[interval], "interval") {
+            continue;
+        }
+        let Some(value) = next_significant(tokens, interval + 1, tokens.len()) else {
+            continue;
+        };
+        if !is_single_quoted_string(&tokens[value]) {
+            continue;
+        }
+        let Some(unit) = next_significant(tokens, value + 1, tokens.len()) else {
+            continue;
+        };
+        if is_unquoted_word(&tokens[unit], "to") {
+            return Err(syntax_error(
+                &tokens[unit],
+                "INTERVAL TO requires a starting field",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_execute_shapes(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = statement_end(tokens, start);
+        let Some(execute) = next_significant(tokens, start, end) else {
+            break;
+        };
+        if is_unquoted_word(&tokens[execute], "execute") {
+            let Some(target) = next_significant(tokens, execute + 1, end) else {
+                return Err(syntax_error(&tokens[execute], "EXECUTE requires a target"));
+            };
+            if is_unquoted_word(&tokens[target], "immediate") {
+                let Some(sql) = next_significant(tokens, target + 1, end) else {
+                    return Err(syntax_error(
+                        &tokens[target],
+                        "EXECUTE IMMEDIATE requires a string",
+                    ));
+                };
+                if !matches!(
+                    tokens[sql].token,
+                    Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_)
+                ) {
+                    return Err(syntax_error(
+                        &tokens[sql],
+                        "EXECUTE IMMEDIATE requires a string",
+                    ));
+                }
+            } else if is_unquoted_word(&tokens[target], "using") || !is_identifier(&tokens[target])
+            {
+                return Err(syntax_error(
+                    &tokens[target],
+                    "EXECUTE requires a prepared statement name",
+                ));
+            }
+        }
+        start = end.saturating_add(1);
+    }
+    Ok(())
+}
+
+fn validate_trino_source_shapes(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    validate_cte_as(tokens)?;
+    validate_fetch_clauses(tokens)?;
+    validate_json_value_invocations(tokens)?;
+    validate_with_ordinality(tokens)?;
+    validate_explain_options(tokens)?;
+    validate_show_statements(tokens)?;
+    validate_current_values(tokens)?;
+    validate_interval_qualifiers(tokens)?;
+    validate_execute_shapes(tokens)?;
     Ok(())
 }
 
@@ -1804,6 +2332,27 @@ fn normalize_group_by_quantifiers(tokens: &mut [TokenWithSpan]) -> Result<(), Pa
         blank_non_whitespace(tokens, quantifier, quantifier + 1);
     }
     Ok(())
+}
+
+fn normalize_group_by_auto(tokens: &mut [TokenWithSpan]) {
+    for auto in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[auto], "auto") {
+            continue;
+        }
+        let Some(by) = previous_significant(tokens, auto) else {
+            continue;
+        };
+        let Some(group) = previous_significant(tokens, by) else {
+            continue;
+        };
+        if is_unquoted_word(&tokens[by], "by") && is_unquoted_word(&tokens[group], "group") {
+            replace_word(
+                &mut tokens[auto],
+                "__trino_group_by_auto",
+                Keyword::NoKeyword,
+            );
+        }
+    }
 }
 
 fn is_grouping_element_position(tokens: &[TokenWithSpan], before: usize) -> bool {
@@ -3777,6 +4326,10 @@ fn normalize_method_calls(tokens: &mut Vec<TokenWithSpan>) {
                 && tokens[open].token == Token::LParen
             {
                 tokens[separator].token = Token::Period;
+                if let Token::Word(word) = &mut tokens[method].token {
+                    word.quote_style = Some('"');
+                    word.keyword = Keyword::NoKeyword;
+                }
             }
             continue;
         }
@@ -3828,8 +4381,94 @@ fn normalize_pattern_processing_modes(tokens: &mut [TokenWithSpan]) {
                     || (word.quote_style.is_none()
                         && !trino_keywords::is_reserved_word(&word.value))
         );
-        if valid_function && tokens[open].token == Token::LParen {
+        let parser_special = matches!(
+            &tokens[function].token,
+            Token::Word(word)
+                if ["if", "nullif", "coalesce", "try", "format"]
+                    .iter()
+                    .any(|name| word.value.eq_ignore_ascii_case(name))
+        );
+        if valid_function && !parser_special && tokens[open].token == Token::LParen {
             tokens[mode].token = Token::Whitespace(Whitespace::Space);
+        }
+    }
+}
+
+fn is_row_pattern_clause(tokens: &[TokenWithSpan], pattern: usize) -> bool {
+    let Some(container) = enclosing_parentheses(tokens, pattern).last().copied() else {
+        return false;
+    };
+    let Some(introducer) = previous_significant(tokens, container) else {
+        return false;
+    };
+    if is_unquoted_word(&tokens[introducer], "match_recognize")
+        || is_unquoted_word(&tokens[introducer], "over")
+    {
+        return true;
+    }
+    if !is_unquoted_word(&tokens[introducer], "as") {
+        return false;
+    }
+    let start = statement_start(tokens, introducer);
+    (start..introducer).rev().any(|index| {
+        is_unquoted_word(&tokens[index], "window")
+            && enclosing_parentheses(tokens, index).len()
+                == enclosing_parentheses(tokens, introducer).len()
+    })
+}
+
+fn normalize_open_pattern_quantifiers(tokens: &mut [TokenWithSpan]) {
+    let mut quantifiers = Vec::new();
+    for pattern in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[pattern], "pattern") {
+            continue;
+        }
+        if !is_row_pattern_clause(tokens, pattern) {
+            continue;
+        }
+        let Some(open) = next_significant(tokens, pattern + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[open].token != Token::LParen {
+            continue;
+        }
+        let Some(close) = matching_rparen(tokens, open) else {
+            continue;
+        };
+        for brace in open + 1..close {
+            if tokens[brace].token != Token::LBrace {
+                continue;
+            }
+            let Some(comma) = next_significant(tokens, brace + 1, close) else {
+                continue;
+            };
+            let Some(right) = next_significant(tokens, comma + 1, close) else {
+                continue;
+            };
+            if tokens[comma].token == Token::Comma && tokens[right].token == Token::RBrace {
+                quantifiers.push((brace, right));
+            }
+        }
+    }
+    for (brace, right) in quantifiers {
+        tokens[brace].token = Token::Mul;
+        blank_non_whitespace(tokens, brace + 1, right + 1);
+    }
+}
+
+fn normalize_over_projection_alias(tokens: &mut [TokenWithSpan]) {
+    for over in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[over], "over") {
+            continue;
+        }
+        let Some(previous) = previous_significant(tokens, over) else {
+            continue;
+        };
+        let Some(next) = next_significant(tokens, over + 1, tokens.len()) else {
+            continue;
+        };
+        if tokens[previous].token == Token::RParen && is_unquoted_word(&tokens[next], "from") {
+            replace_word(&mut tokens[over], "over", Keyword::NoKeyword);
         }
     }
 }
@@ -4479,15 +5118,165 @@ fn validate_trino_aliases(
     }
 }
 
-fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
+fn source_ident_index(tokens: &[TokenWithSpan], ident: &Ident) -> Option<usize> {
+    tokens.iter().position(|token| {
+        token.span.start == ident.span.start
+            && matches!(
+                &token.token,
+                Token::Word(word)
+                    if word.value == ident.value && word.quote_style == ident.quote_style
+            )
+    })
+}
+
+fn validate_trino_ast(
+    statements: &[Statement],
+    source_tokens: &[TokenWithSpan],
+) -> Result<(), ParserError> {
     let mut error = None;
     struct GrammarVisitor<'a> {
         error: &'a mut Option<ParserError>,
+        source_tokens: &'a [TokenWithSpan],
     }
     impl GrammarVisitor<'_> {
         fn reject(&mut self, message: &str) -> ControlFlow<()> {
             *self.error = Some(ParserError::ParserError(message.to_string()));
             ControlFlow::Break(())
+        }
+
+        fn reject_at(&mut self, message: &str, line: u64, column: u64) -> ControlFlow<()> {
+            *self.error = Some(ParserError::ParserError(format!(
+                "{message} at Line: {line}, Column: {column}"
+            )));
+            ControlFlow::Break(())
+        }
+
+        fn reject_at_ident(&mut self, message: &str, ident: &Ident) -> ControlFlow<()> {
+            self.reject_at(message, ident.span.start.line, ident.span.start.column)
+        }
+
+        fn reject_at_token(&mut self, message: &str, token: &TokenWithSpan) -> ControlFlow<()> {
+            self.reject_at(message, token.span.start.line, token.span.start.column)
+        }
+
+        fn validate_ident(&mut self, ident: &Ident) -> ControlFlow<()> {
+            if ident.quote_style.is_none() && trino_keywords::is_reserved_word(&ident.value) {
+                return self.reject_at_ident(
+                    &format!(
+                        "reserved keyword '{}' cannot be used as an unquoted Trino identifier",
+                        ident.value
+                    ),
+                    ident,
+                );
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn validate_object_name(&mut self, name: &ObjectName) -> ControlFlow<()> {
+            for ident in name.0.iter().filter_map(|part| part.as_ident()) {
+                if self.validate_ident(ident).is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn validate_data_type(&mut self, data_type: &DataType) -> ControlFlow<()> {
+            match data_type {
+                DataType::Struct(fields, _) | DataType::Tuple(fields) => {
+                    for field in fields {
+                        if let Some(name) = &field.field_name {
+                            if self.validate_ident(name).is_break() {
+                                return ControlFlow::Break(());
+                            }
+                        }
+                        if self.validate_data_type(&field.field_type).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                DataType::Array(element) => {
+                    let element = match element {
+                        ArrayElemTypeDef::None => None,
+                        ArrayElemTypeDef::AngleBracket(element)
+                        | ArrayElemTypeDef::SquareBracket(element, _)
+                        | ArrayElemTypeDef::Parenthesis(element) => Some(element.as_ref()),
+                    };
+                    if element.is_some_and(|element| self.validate_data_type(element).is_break()) {
+                        return ControlFlow::Break(());
+                    }
+                }
+                DataType::Map(key, value) => {
+                    if self.validate_data_type(key).is_break()
+                        || self.validate_data_type(value).is_break()
+                    {
+                        return ControlFlow::Break(());
+                    }
+                }
+                DataType::Nested(columns) => {
+                    for column in columns {
+                        if self.validate_ident(&column.name).is_break()
+                            || self.validate_data_type(&column.data_type).is_break()
+                        {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                DataType::Nullable(inner) | DataType::LowCardinality(inner) => {
+                    if self.validate_data_type(inner).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn validate_expression_function_name(&mut self, name: &ObjectName) -> ControlFlow<()> {
+            if name.0.len() != 1 {
+                return self.validate_object_name(name);
+            }
+            let Some(ident) = name.0.first().and_then(|part| part.as_ident()) else {
+                return ControlFlow::Continue(());
+            };
+            let syntax_function = matches!(
+                ident.value.to_ascii_lowercase().as_str(),
+                "current_date"
+                    | "current_catalog"
+                    | "current_path"
+                    | "current_schema"
+                    | "current_time"
+                    | "current_timestamp"
+                    | "current_user"
+                    | "grouping"
+                    | "json_array"
+                    | "json_exists"
+                    | "json_object"
+                    | "json_query"
+                    | "json_value"
+                    | "listagg"
+                    | "localtime"
+                    | "localtimestamp"
+                    | "normalize"
+                    | "rollup"
+                    | "session_user"
+                    | "system_user"
+                    | "table"
+            );
+            if !syntax_function && self.validate_ident(ident).is_break() {
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn validate_match_measure_alias(&mut self, alias: &Ident) -> ControlFlow<()> {
+            let explicit_as = source_ident_index(self.source_tokens, alias)
+                .and_then(|alias| previous_significant(self.source_tokens, alias))
+                .is_some_and(|previous| is_unquoted_word(&self.source_tokens[previous], "as"));
+            if !explicit_as {
+                return self.reject_at_ident("MATCH_RECOGNIZE measure aliases require AS", alias);
+            }
+            ControlFlow::Continue(())
         }
     }
     impl Visitor for GrammarVisitor<'_> {
@@ -4496,6 +5285,9 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
         fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
             match statement {
                 Statement::Call(function) => {
+                    if self.validate_object_name(&function.name).is_break() {
+                        return ControlFlow::Break(());
+                    }
                     let valid_argument = |argument: &FunctionArg| match argument {
                         FunctionArg::Unnamed(FunctionArgExpr::Expr(_)) => true,
                         FunctionArg::Named { arg, operator, .. } => {
@@ -4531,17 +5323,79 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
                     }
                 }
                 Statement::Delete(delete) => {
-                    if delete.using.is_some() || delete.returning.is_some() {
-                        return self.reject("invalid Trino DELETE syntax");
+                    if !matches!(delete.from, FromTable::WithFromKeyword(_))
+                        || delete.using.is_some()
+                        || delete.returning.is_some()
+                    {
+                        return self.reject_at_token(
+                            "invalid Trino DELETE syntax",
+                            &delete.delete_token.0,
+                        );
                     }
                 }
                 Statement::Insert(insert) => {
-                    if insert.returning.is_some() {
-                        return self.reject("INSERT RETURNING is not supported by Trino");
+                    if !insert.into || insert.returning.is_some() {
+                        return self.reject_at_token(
+                            "invalid Trino INSERT syntax",
+                            &insert.insert_token.0,
+                        );
+                    }
+                }
+                Statement::Truncate(truncate) => {
+                    if !truncate.table {
+                        if let Some(ident) = truncate
+                            .table_names
+                            .first()
+                            .and_then(|target| target.name.0.first())
+                            .and_then(|part| part.as_ident())
+                        {
+                            return self.reject_at_ident("Trino TRUNCATE requires TABLE", ident);
+                        }
+                        return self.reject("Trino TRUNCATE requires TABLE");
+                    }
+                }
+                Statement::Deallocate { name, prepare } => {
+                    if self.validate_ident(name).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                    if !prepare {
+                        return self.reject_at_ident("Trino DEALLOCATE requires PREPARE", name);
+                    }
+                }
+                Statement::Execute {
+                    name,
+                    parameters,
+                    has_parentheses,
+                    immediate,
+                    into,
+                    output,
+                    default,
+                    ..
+                } => {
+                    if let Some(name) = name {
+                        if self.validate_object_name(name).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                    let valid = if *immediate {
+                        name.is_none() && !has_parentheses
+                    } else {
+                        name.is_some() && parameters.is_empty() && !has_parentheses
+                    };
+                    if !valid || !into.is_empty() || *output || *default {
+                        return self.reject("invalid Trino EXECUTE syntax");
                     }
                 }
                 Statement::CreateTable(create) => {
                     for column in &create.columns {
+                        let table_like = column.name.quote_style.is_none()
+                            && column.name.value.eq_ignore_ascii_case("like");
+                        if !table_like && self.validate_ident(&column.name).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                        if self.validate_data_type(&column.data_type).is_break() {
+                            return ControlFlow::Break(());
+                        }
                         for option in &column.options {
                             if let ColumnOption::Default(expr) = &option.option {
                                 if !is_trino_literal(expr) {
@@ -4551,12 +5405,129 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
                         }
                     }
                 }
+                Statement::CreateView(create) => {
+                    if self.validate_object_name(&create.name).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                    for column in &create.columns {
+                        if self.validate_ident(&column.name).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                        if column
+                            .data_type
+                            .as_ref()
+                            .is_some_and(|data_type| self.validate_data_type(data_type).is_break())
+                        {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                Statement::Drop { names, .. } => {
+                    for name in names {
+                        if self.validate_object_name(name).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                Statement::CreateSchema { schema_name, .. } => match schema_name {
+                    SchemaName::Simple(name) => {
+                        if self.validate_object_name(name).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                    SchemaName::UnnamedAuthorization(authorization) => {
+                        if self.validate_ident(authorization).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                    SchemaName::NamedAuthorization(name, authorization) => {
+                        if self.validate_object_name(name).is_break()
+                            || self.validate_ident(authorization).is_break()
+                        {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                },
+                Statement::CreateFunction(create) => {
+                    if self.validate_object_name(&create.name).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                    if let Some(arguments) = &create.args {
+                        for argument in arguments {
+                            if argument
+                                .name
+                                .as_ref()
+                                .is_some_and(|name| self.validate_ident(name).is_break())
+                                || self.validate_data_type(&argument.data_type).is_break()
+                            {
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    }
+                    if let Some(return_type) = &create.return_type {
+                        let data_type = match return_type {
+                            FunctionReturnType::DataType(data_type)
+                            | FunctionReturnType::SetOf(data_type) => data_type,
+                        };
+                        if self.validate_data_type(data_type).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                Statement::Comment { object_name, .. } => {
+                    if self.validate_object_name(object_name).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                }
+                Statement::Prepare {
+                    name, data_types, ..
+                } => {
+                    if self.validate_ident(name).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                    for data_type in data_types {
+                        if self.validate_data_type(data_type).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
                 _ => {}
             }
             ControlFlow::Continue(())
         }
 
         fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+            let has_limit = matches!(
+                query.limit_clause,
+                Some(LimitClause::LimitOffset { limit: Some(_), .. })
+                    | Some(LimitClause::OffsetCommaLimit { .. })
+            );
+            if has_limit && query.fetch.is_some() {
+                if let Some(quantity) = query
+                    .fetch
+                    .as_ref()
+                    .and_then(|fetch| fetch.quantity.as_ref())
+                {
+                    let start = quantity.span().start;
+                    return self.reject_at(
+                        "Trino query cannot contain both LIMIT and FETCH",
+                        start.line,
+                        start.column,
+                    );
+                }
+                if let Some(fetch) = self
+                    .source_tokens
+                    .iter()
+                    .find(|token| is_unquoted_word(token, "fetch"))
+                    .cloned()
+                {
+                    return self.reject_at_token(
+                        "Trino query cannot contain both LIMIT and FETCH",
+                        &fetch,
+                    );
+                }
+                return self.reject("Trino query cannot contain both LIMIT and FETCH");
+            }
             if let Some(limit_clause) = &query.limit_clause {
                 let valid = match limit_clause {
                     LimitClause::LimitOffset {
@@ -4583,10 +5554,100 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
             if select.qualify.is_some() {
                 return self.reject("QUALIFY is not supported by Trino");
             }
+            for table in &select.from {
+                for join in &table.joins {
+                    let constraint = match &join.join_operator {
+                        JoinOperator::Join(constraint)
+                        | JoinOperator::Inner(constraint)
+                        | JoinOperator::Left(constraint)
+                        | JoinOperator::LeftOuter(constraint)
+                        | JoinOperator::Right(constraint)
+                        | JoinOperator::RightOuter(constraint)
+                        | JoinOperator::FullOuter(constraint) => constraint,
+                        JoinOperator::CrossJoin(JoinConstraint::None) => continue,
+                        JoinOperator::CrossJoin(_) => {
+                            return self.reject("Trino CROSS JOIN cannot have join criteria");
+                        }
+                        _ => return self.reject("join type is not supported by Trino"),
+                    };
+                    match constraint {
+                        JoinConstraint::None => {
+                            if let TableFactor::Table { name, .. } = &join.relation {
+                                if let Some(ident) = name.0.first().and_then(|part| part.as_ident())
+                                {
+                                    return self
+                                        .reject_at_ident("Trino JOIN requires ON or USING", ident);
+                                }
+                            }
+                            return self.reject("Trino JOIN requires ON or USING");
+                        }
+                        JoinConstraint::Using(columns)
+                            if columns.is_empty()
+                                || columns.iter().any(|column| column.0.len() != 1) =>
+                        {
+                            if let Some(ident) = columns
+                                .iter()
+                                .flat_map(|column| column.0.iter())
+                                .find_map(|part| part.as_ident())
+                            {
+                                return self.reject_at_ident(
+                                    "Trino JOIN USING requires unqualified column names",
+                                    ident,
+                                );
+                            }
+                            return self
+                                .reject("Trino JOIN USING requires unqualified column names");
+                        }
+                        JoinConstraint::Using(columns) => {
+                            for column in columns {
+                                if self.validate_object_name(column).is_break() {
+                                    return ControlFlow::Break(());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             ControlFlow::Continue(())
         }
 
         fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+            match expr {
+                Expr::Identifier(ident) => {
+                    let current_value = ident.quote_style.is_none()
+                        && matches!(
+                            ident.value.to_ascii_lowercase().as_str(),
+                            "current_catalog"
+                                | "current_date"
+                                | "current_path"
+                                | "current_schema"
+                                | "current_time"
+                                | "current_timestamp"
+                                | "current_user"
+                                | "localtime"
+                                | "localtimestamp"
+                                | "session_user"
+                                | "system_user"
+                        );
+                    if !current_value && self.validate_ident(ident).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                }
+                Expr::CompoundIdentifier(idents) => {
+                    for ident in idents {
+                        if self.validate_ident(ident).is_break() {
+                            return ControlFlow::Break(());
+                        }
+                    }
+                }
+                Expr::Cast { data_type, .. } => {
+                    if self.validate_data_type(data_type).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                }
+                _ => {}
+            }
             if matches!(expr, Expr::ILike { .. })
                 || matches!(
                     expr,
@@ -4598,6 +5659,82 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
             {
                 return self.reject("operator is not supported by Trino");
             }
+            if let Expr::Function(function) = expr {
+                if self
+                    .validate_expression_function_name(&function.name)
+                    .is_break()
+                {
+                    return ControlFlow::Break(());
+                }
+                if function.name.0.len() > 1 {
+                    return ControlFlow::Continue(());
+                }
+                let Some(name) = function.name.0.first().and_then(|part| part.as_ident()) else {
+                    return ControlFlow::Continue(());
+                };
+                let name = name.value.to_ascii_lowercase();
+                let expected = match name.as_str() {
+                    "if" => Some((2usize, Some(3usize))),
+                    "nullif" => Some((2, Some(2))),
+                    "coalesce" => Some((2, None)),
+                    "try" => Some((1, Some(1))),
+                    "format" => Some((2, None)),
+                    _ => None,
+                };
+                if let Some((minimum, maximum)) = expected {
+                    let valid_arguments = match &function.args {
+                        FunctionArguments::List(arguments) => {
+                            let count = arguments.args.len();
+                            arguments.duplicate_treatment.is_none()
+                                && arguments.clauses.is_empty()
+                                && count >= minimum
+                                && maximum.map_or(true, |maximum| count <= maximum)
+                                && arguments.args.iter().all(|argument| {
+                                    matches!(
+                                        argument,
+                                        FunctionArg::Unnamed(FunctionArgExpr::Expr(_))
+                                    ) || (count == 1
+                                        && matches!(
+                                            argument,
+                                            FunctionArg::Unnamed(
+                                                FunctionArgExpr::QualifiedWildcard(_)
+                                            )
+                                        ))
+                                })
+                        }
+                        _ => false,
+                    };
+                    if !matches!(function.parameters, FunctionArguments::None)
+                        || !valid_arguments
+                        || function.filter.is_some()
+                        || function.null_treatment.is_some()
+                        || function.over.is_some()
+                        || !function.within_group.is_empty()
+                    {
+                        return self.reject_at_ident(
+                            "invalid Trino parser-special function syntax",
+                            function
+                                .name
+                                .0
+                                .first()
+                                .and_then(|part| part.as_ident())
+                                .expect("single-part function name must be an identifier"),
+                        );
+                    }
+                }
+            }
+            ControlFlow::Continue(())
+        }
+
+        fn pre_visit_relation(
+            &mut self,
+            relation: &sqlparser::ast::ObjectName,
+        ) -> ControlFlow<Self::Break> {
+            for ident in relation.0.iter().filter_map(|part| part.as_ident()) {
+                if self.validate_ident(ident).is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
             ControlFlow::Continue(())
         }
 
@@ -4605,6 +5742,13 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
             &mut self,
             table_factor: &TableFactor,
         ) -> ControlFlow<Self::Break> {
+            if let TableFactor::MatchRecognize { measures, .. } = table_factor {
+                for measure in measures {
+                    if self.validate_match_measure_alias(&measure.alias).is_break() {
+                        return ControlFlow::Break(());
+                    }
+                }
+            }
             match table_factor {
                 TableFactor::Table {
                     sample: Some(sample),
@@ -4627,7 +5771,10 @@ fn validate_trino_ast(statements: &[Statement]) -> Result<(), ParserError> {
         }
     }
 
-    let mut visitor = GrammarVisitor { error: &mut error };
+    let mut visitor = GrammarVisitor {
+        error: &mut error,
+        source_tokens,
+    };
     let _ = statements.to_vec().visit(&mut visitor);
     match error {
         Some(error) => Err(error),
@@ -5090,7 +6237,10 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     let source_tokens = tokens.clone();
     let custom_statement_kinds = collect_custom_statement_kinds(&tokens);
     let source_type_names = collect_source_type_names(&tokens);
+    validate_trino_lexical_tokens(&tokens)?;
+    validate_empty_statement_segments(&tokens)?;
     validate_balanced_groups(&tokens)?;
+    validate_trino_source_shapes(&tokens)?;
     validate_trino_typed_literals(&tokens)?;
     validate_trino_table_samples(&tokens)?;
     validate_trino_create_table_forms(&tokens)?;
@@ -5112,6 +6262,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_contextual_alias_words(&mut tokens);
     normalize_corresponding_set_operations(&mut tokens)?;
     normalize_group_by_quantifiers(&mut tokens)?;
+    normalize_group_by_auto(&mut tokens);
     normalize_empty_grouping_elements(&mut tokens);
     compatibility_metadata.extend(normalize_pivot_group_by(&mut tokens, dialect)?);
     normalize_nearest_relations(&mut tokens, dialect)?;
@@ -5124,6 +6275,8 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_empty_lambdas(&mut tokens);
     normalize_method_calls(&mut tokens);
     normalize_pattern_processing_modes(&mut tokens);
+    normalize_open_pattern_quantifiers(&mut tokens);
+    normalize_over_projection_alias(&mut tokens);
     normalize_unicode_escapes(&mut tokens)?;
     normalize_scalar_values(&mut tokens);
     normalize_typed_values(&mut tokens);
@@ -5150,7 +6303,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
         .parse_statements();
     if let Ok(statements) = parsed {
         validate_trino_aliases(&statements, &source_tokens)?;
-        validate_trino_ast(&statements)?;
+        validate_trino_ast(&statements, &source_tokens)?;
         return Ok(ParsedSql {
             statements,
             inline_functions: Vec::new(),
@@ -5174,7 +6327,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     for (_, statement) in &inline_functions {
         validate_trino_aliases(std::slice::from_ref(statement), &source_tokens)?;
     }
-    validate_trino_ast(&statements)?;
+    validate_trino_ast(&statements, &source_tokens)?;
     Ok(ParsedSql {
         statements,
         inline_functions,
@@ -5339,7 +6492,9 @@ mod tests {
             "SELECT JSON_OBJECT('k' : 1, 'name' : 'x')",
             "SELECT * FROM JSON_TABLE(col, 'lax $' COLUMNS(name varchar FORMAT JSON PATH 'lax $.name' WITH WRAPPER KEEP QUOTES NULL ON EMPTY, regions varchar FORMAT JSON ENCODING UTF16 PATH 'lax $.regions' EMPTY ARRAY ON EMPTY EMPTY OBJECT ON ERROR) EMPTY ON ERROR)",
         ] {
-            assert!(parse_sql(&dialect, sql).is_ok(), "expected to parse: {sql}");
+            if let Err(error) = parse_sql(&dialect, sql) {
+                panic!("expected to parse: {sql}: {error}");
+            }
         }
     }
 
@@ -5383,6 +6538,171 @@ mod tests {
                 parse_sql(&dialect, sql).is_err(),
                 "expected to reject: {sql}"
             );
+        }
+    }
+
+    #[test]
+    fn v018_rejects_previous_false_accepts() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "SELECT orderkey, custkey, FROM orders",
+            "SELECT orderkey, custkey, totalprice, FROM orders WHERE orderkey = 1",
+            "SELECT * FROM orders o JOIN customers c",
+            "SELECT X'ABC' FROM orders",
+            "SELECT * FROM select",
+            "CREATE TABLE where (id integer)",
+            "SELECT from FROM orders",
+            "CREATE TABLE group (id integer, order integer)",
+            "WITH big (SELECT * FROM orders) SELECT * FROM big",
+            "SELECT * FROM orders o JOIN customers c USING (o.custkey)",
+            "SELECT IF(totalprice > 100) FROM orders",
+            "SELECT coalesce() FROM orders",
+            "SELECT nullif(orderstatus, 'O', 'F') FROM orders",
+            "INSERT orders VALUES (1)",
+            "DELETE orders WHERE orderkey = 1",
+            "TRUNCATE orders",
+            "SELECT * FROM orders FETCH FIRST 5",
+            "SELECT * FROM orders FETCH NEXT 5 ONLY",
+            "SELECT * FROM orders LIMIT 10 FETCH FIRST 5 ROWS ONLY",
+            "SELECT JSON_VALUE(payload) FROM events",
+            "SELECT json_extract(payload, $.page) FROM events",
+            "SELECT * FROM orders MATCH_RECOGNIZE (MEASURES match_number() mn PATTERN (a) DEFINE a AS true)",
+            "EXECUTE USING 1",
+            "DEALLOCATE stmt1",
+            "SELECT * FROM orders;;",
+            "SELECT * FROM orders;;;",
+            ";",
+            "SELECT * FROM orders WHERE orderkey == 1",
+            "SELECT INTERVAL '3' TO DAY FROM orders",
+            "SELECT * FROM orders WITH ORDINALITY",
+            "EXPLAIN (TYPE UNKNOWN) SELECT * FROM orders",
+            "SHOW",
+            "SELECT order-key FROM orders",
+            "SELECT CURRENT_DATE() FROM orders",
+            "SELECT CURRENT_TIMESTAMP(3, 4) FROM orders",
+            "SELECT schema.json_value(payload), schema.current_timestamp(3, 4) FROM events",
+        ] {
+            assert!(
+                parse_sql(&dialect, sql).is_err(),
+                "expected to reject: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn v018_preserves_positive_neighbors() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "SELECT orderkey, custkey",
+            "SELECT 'closed\nstring' FROM orders",
+            "SELECT row_number() OVER FROM orders",
+            "SELECT sum(totalprice) OVER (ORDER BY orderdate ROWS 2 PRECEDING) FROM orders",
+            "INSERT INTO orders VALUES 1, 'O', 100",
+            "SELECT * FROM orders FETCH FIRST ROWS ONLY",
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (a{,}) DEFINE a AS true)",
+            "SELECT * FROM orders MATCH_RECOGNIZE (PATTERN (a{,}?) DEFINE a AS true)",
+            "SELECT INTERVAL '3' FROM orders",
+            "SELECT ROW(1, 2) FROM orders",
+            "SELECT count(orderkey) FROM orders",
+            "SELECT X'AB CD' FROM orders",
+            "SELECT * FROM orders OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY",
+            "SELECT if(true, 1), if(false, 1, 2), nullif(1, 2), coalesce(1, 2), try(1 / 0), format('%s', 1)",
+            "SELECT try(t.*) FROM t",
+            "SELECT t::values()",
+            "SELECT \"schema\".\"json_value\"(payload), \"schema\".\"current_timestamp\"(3, 4) FROM events",
+            "EXECUTE statement_name USING 1",
+            "EXECUTE IMMEDIATE 'SELECT ?' USING 1",
+            "SELECT CURRENT_DATE, CURRENT_TIME(3), CURRENT_TIMESTAMP, LOCALTIME(2), LOCALTIMESTAMP",
+            "SELECT mktsegment, sum(acctbal) FROM shipping GROUP BY AUTO",
+            "SELECT 1 AS FETCH, 2 AS ORDINALITY",
+            "SELECT \"from\".\"where\" FROM \"select\" AS \"from\"",
+            "SELECT 1; SELECT 2;",
+            "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT BEGIN RETURN x + 1; END;",
+        ] {
+            if let Err(error) = parse_sql(&dialect, sql) {
+                panic!("expected to parse: {sql}: {error}");
+            }
+        }
+        assert!(parse_sql(&dialect, "SELECT pattern(a{,})").is_err());
+    }
+
+    #[test]
+    fn v018_post_review_rejects_structural_gaps() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "WITH a AS (SELECT 1), b (SELECT 2) SELECT * FROM b",
+            "WITH a AS (SELECT 1), b(x) (SELECT 2) SELECT * FROM b",
+            "WITH a AS (SELECT 1), b AS (SELECT 2), c (SELECT 3) SELECT * FROM c",
+            "WITH a AS (WITH b (SELECT 1) SELECT * FROM b) SELECT * FROM a",
+            "WITH x(\"select\", \"where\") (SELECT 1, 2) SELECT * FROM x",
+            "SELECT RUNNING if(true, 1)",
+            "SELECT RUNNING \"if\"(true, 1)",
+            "SELECT FINAL coalesce(1, 2)",
+            "SELECT if(t.*, 1) FROM t",
+            "SELECT nullif(t.*, 1) FROM t",
+            "SELECT coalesce(t.*, 1) FROM t",
+            "SELECT try(t.*, 1) FROM t",
+            "SELECT format(t.*, 1) FROM t",
+            "CREATE VIEW select AS SELECT 1",
+            "DROP VIEW select",
+            "CREATE SCHEMA select",
+            "ALTER TABLE select RENAME TO x",
+            "GRANT SELECT ON TABLE select TO ROLE analyst",
+            "PREPARE select FROM SELECT 1",
+            "EXECUTE select",
+            "DEALLOCATE PREPARE select",
+            "CREATE FUNCTION f(select BIGINT) RETURNS BIGINT RETURN 1",
+            "CREATE FUNCTION f(x ROW(select BIGINT)) RETURNS BIGINT RETURN 1",
+            "SELECT CAST(ROW(1) AS ROW(select BIGINT))",
+            "SELECT * FROM a JOIN b USING (select)",
+            "SELECT where(1)",
+            "CALL select()",
+        ] {
+            assert!(
+                parse_sql(&dialect, sql).is_err(),
+                "expected to reject: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn v018_post_review_preserves_quoted_and_non_reserved_neighbors() {
+        let dialect = TrinoDialect {};
+        for sql in [
+            "WITH a AS (SELECT 1), b AS (SELECT 2), c(x) AS (SELECT 3) SELECT * FROM c",
+            "WITH outer_cte AS (WITH inner_cte AS (SELECT 1) SELECT * FROM inner_cte) SELECT * FROM outer_cte",
+            "WITH x(\"select\", \"where\") AS (SELECT 1, 2) SELECT * FROM x",
+            "SELECT RUNNING sum(x) FROM t",
+            "SELECT FINAL first(x) FROM t",
+            "SELECT try(t.*) FROM t",
+            "CREATE VIEW \"select\" AS SELECT 1",
+            "DROP VIEW \"select\"",
+            "CREATE SCHEMA \"select\"",
+            "ALTER TABLE \"select\" RENAME TO x",
+            "GRANT SELECT ON TABLE \"select\" TO ROLE analyst",
+            "PREPARE \"select\" FROM SELECT 1",
+            "EXECUTE \"select\"",
+            "DEALLOCATE PREPARE \"select\"",
+            "CREATE FUNCTION \"select\"(\"where\" BIGINT) RETURNS BIGINT RETURN \"where\"",
+            "CREATE FUNCTION f(x ROW(\"select\" BIGINT)) RETURNS ROW(\"where\" BIGINT) RETURN CAST(ROW(1) AS ROW(\"where\" BIGINT))",
+            "SELECT CAST(ROW(1) AS ROW(\"select\" BIGINT))",
+            "SELECT * FROM a JOIN b USING (\"select\")",
+            "SELECT \"where\"(1)",
+            "CALL \"select\"()",
+            "SELECT * FROM t MATCH_RECOGNIZE (MEASURES after + 1 AS first_value, A.x AS second_value PATTERN (A) DEFINE A AS true)",
+        ] {
+            if let Err(error) = parse_sql(&dialect, sql) {
+                panic!("expected to parse: {sql}: {error}");
+            }
+        }
+
+        for word in ["after", "all", "one", "pattern", "subset", "define"] {
+            let sql = format!(
+                "SELECT * FROM t MATCH_RECOGNIZE (MEASURES {word} + 1 AS m PATTERN (A) DEFINE A AS true)"
+            );
+            if let Err(error) = parse_sql(&dialect, &sql) {
+                panic!("expected to parse: {sql}: {error}");
+            }
         }
     }
 }

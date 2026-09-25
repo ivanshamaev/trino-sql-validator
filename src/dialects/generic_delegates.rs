@@ -344,7 +344,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_execute_immediate(&self) -> bool {
-        GenericDialect::supports_execute_immediate(&GenericDialect {})
+        true
     }
 
     fn supports_explain_with_utility_options(&self) -> bool {
@@ -552,7 +552,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_projection_trailing_commas(&self) -> bool {
-        GenericDialect::supports_projection_trailing_commas(&GenericDialect {})
+        false
     }
 
     fn supports_quote_delimited_string(&self) -> bool {
@@ -668,7 +668,7 @@ impl Dialect for TrinoDialect {
     }
 
     fn supports_trailing_commas(&self) -> bool {
-        GenericDialect::supports_trailing_commas(&GenericDialect {})
+        false
     }
 
     fn supports_triple_quoted_string(&self) -> bool {
