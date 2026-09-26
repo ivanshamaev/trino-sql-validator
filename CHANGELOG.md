@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added 30 single-statement invalid data-mart fixtures with exact catalog-warning
+  expectations. The current suite contains 4,748 pytest cases and 82 Rust unit
+  tests; the diagnostic fixtures remain separate from the 553-statement positive
+  parser corpus.
+
 ## [0.19.0] - 2026-09-26
 
 ### Added

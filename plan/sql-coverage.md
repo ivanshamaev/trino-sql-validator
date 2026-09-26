@@ -4,9 +4,13 @@ Status: v0.19.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
 
 ## Measured coverage
 
-- All 48 SQL files in `tests/fixtures` have explicit outcome, statement-count,
+- All 78 SQL files in `tests/fixtures` have explicit outcome, statement-count,
   warning, and feature-profile expectations. All 553 statements from positive
   non-empty fixtures are also validated independently.
+- The 30 files in `tests/fixtures/invalid_datamarts` are diagnostic fixtures:
+  every file contains one statement and must return at least one catalog warning
+  or a parser error. They are intentionally excluded from the positive corpus.
+- The current automated suite collects 4,748 pytest cases and 82 Rust unit tests.
 - `trino_invalid_sql.sql` contributes 236 independent parser-negative cases;
   each is passed to `validate()` separately rather than as multi-statement SQL.
   Trino 483 and v0.19.0 both reject all 236, compared with 201/236 rejections in

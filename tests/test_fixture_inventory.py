@@ -20,6 +20,7 @@ class FixtureExpectation:
     error_fragment: str | None = None
     independent_invalid: bool = False
     case_count: int | None = None
+    diagnostic_fixture: bool = False
 
 
 DATAMART_FEATURES = {
@@ -56,6 +57,50 @@ DATAMART_FEATURES = {
 }
 
 
+INVALID_DATAMART_WARNINGS = {
+    "mart_ad_spend_return_roas.sql": ("nvl", "nvl", "nvl", "nvl"),
+    "mart_anti_money_laundering_alerts.sql": ("range_sum",),
+    "mart_app_user_cohort_retention.sql": ("square",),
+    "mart_attribution_multi_touch_model.sql": ("isdate",),
+    "mart_call_center_agent_performance.sql": ("percentile",),
+    "mart_card_chargeback_rates.sql": ("nvl", "ratio_to_report"),
+    "mart_cdr_roaming_settlements.sql": ("trunc_number",),
+    "mart_credit_risk_scoring_features.sql": ("top_k",),
+    "mart_cross_category_affinity.sql": ("dense_rank_by",),
+    "mart_currency_exchange_pnl.sql": ("avg_nulls_last", "wm_concat"),
+    "mart_customer_rfm_analytics.sql": ("datediff",),
+    "mart_daily_sales_rollup_cubes.sql": ("nvl2",),
+    "mart_data_mesh_quality_metrics.sql": ("adddate",),
+    "mart_email_campaign_funnel_performance.sql": ("convert", "varchar"),
+    "mart_finance_daily_cashflow.sql": ("zeroifnull",),
+    "mart_fleet_fuel_consumption.sql": ("substring_index",),
+    "mart_inventory_aging_analysis.sql": (
+        "getdate",
+        "datediff",
+        "datediff",
+        "datediff",
+    ),
+    "mart_iot_telemetry_anomaly_detection.sql": ("to_timestamp_tz",),
+    "mart_loan_portfolio_impairment.sql": ("last_day", "add_months"),
+    "mart_network_cell_tower_load.sql": ("string_agg",),
+    "mart_order_fulfillment_sla.sql": ("percentile_cont", "decode"),
+    "mart_ott_user_content_recommendations.sql": ("wm_concat",),
+    "mart_product_conversion_funnel.sql": ("isnull",),
+    "mart_seo_keyword_rankings_daily.sql": ("ifnull",),
+    "mart_streaming_qos_session_metrics.sql": (
+        "instr",
+        "str_to_date",
+        "instr",
+        "str_to_date",
+    ),
+    "mart_subscriber_lifetime_value_cohorts.sql": ("first_value_distinct",),
+    "mart_supply_chain_vendor_scorecard.sql": ("charindex",),
+    "mart_telecom_churn_prediction_base.sql": ("datediff", "get_bit"),
+    "mart_warehouse_picking_efficiency.sql": ("timestamp_diff", "timestamp_diff"),
+    "mart_web_session_clickstream_paths.sql": ("timediff",),
+}
+
+
 FIXTURE_EXPECTATIONS = {
     "datamart_example.sql": FixtureExpectation(True, 1),
     "ddl_multi.sql": FixtureExpectation(True, 3),
@@ -80,6 +125,15 @@ FIXTURE_EXPECTATIONS = {
     **{
         f"datamarts/{filename}": FixtureExpectation(True, 1)
         for filename in DATAMART_FEATURES
+    },
+    **{
+        f"invalid_datamarts/{filename}": FixtureExpectation(
+            True,
+            1,
+            warning_names=warning_names,
+            diagnostic_fixture=True,
+        )
+        for filename, warning_names in INVALID_DATAMART_WARNINGS.items()
     },
 }
 
@@ -111,6 +165,14 @@ FIXTURE_FEATURES = {
     **{
         f"datamarts/{filename}": ("datamart", "native-trino-483", *features)
         for filename, features in DATAMART_FEATURES.items()
+    },
+    **{
+        f"invalid_datamarts/{filename}": (
+            "negative",
+            "datamart",
+            "catalog-warning",
+        )
+        for filename in INVALID_DATAMART_WARNINGS
     },
 }
 
@@ -251,7 +313,7 @@ def split_sql_statements(sql: str) -> list[str]:
 def positive_fixture_statements() -> list[tuple[str, int, str]]:
     cases = []
     for filename, expected in FIXTURE_EXPECTATIONS.items():
-        if not expected.valid:
+        if not expected.valid or expected.diagnostic_fixture:
             continue
         statements = split_sql_statements((FIXTURES / filename).read_text(encoding="utf-8"))
         cases.extend((filename, index, sql) for index, sql in enumerate(statements, 1))
@@ -330,12 +392,27 @@ def test_iceberg_fixture_has_no_catalog_warnings() -> None:
     assert result.warnings == ()
 
 
+@pytest.mark.parametrize(
+    ("filename", "warning_names"),
+    INVALID_DATAMART_WARNINGS.items(),
+    ids=INVALID_DATAMART_WARNINGS,
+)
+def test_invalid_datamart_fixture_emits_a_diagnostic(
+    filename: str, warning_names: tuple[str, ...]
+) -> None:
+    result = validate_file(FIXTURES / "invalid_datamarts" / filename)
+
+    assert result.error is not None or result.warnings
+    assert tuple(warning.name for warning in result.warnings) == warning_names
+    assert result.statement_count == 1
+
+
 def test_positive_fixture_splitter_preserves_expected_statement_counts() -> None:
     actual: dict[str, int] = {}
     for filename, _, _ in POSITIVE_FIXTURE_STATEMENTS:
         actual[filename] = actual.get(filename, 0) + 1
     for filename, expected in FIXTURE_EXPECTATIONS.items():
-        if expected.valid:
+        if expected.valid and not expected.diagnostic_fixture:
             assert actual.get(filename, 0) == expected.statement_count
     assert len(POSITIVE_FIXTURE_STATEMENTS) == 553
 

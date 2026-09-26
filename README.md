@@ -168,6 +168,7 @@ error. Semicolon-separated statements have independent per-statement budgets.
 ## Development
 
 See [`AGENTS.md`](AGENTS.md) for setup, internal conventions, and release steps.
+The current automated suite contains 4,748 pytest cases and 82 Rust unit tests.
 Key commands:
 
 ```bash
