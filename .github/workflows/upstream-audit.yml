@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      report-sqlglot-main-drift:
+        description: Also compare against the current SQLGlot main branch
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -35,7 +40,7 @@ jobs:
           --fail-on-regression
 
   trino-master-drift:
-    if: github.event_name == 'workflow_dispatch' && inputs.report-master-drift
+    if: github.event_name == 'workflow_dispatch' && inputs['report-master-drift']
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
@@ -52,3 +57,44 @@ jobs:
           python tools/audit_upstream_parsers.py
           --trino-ref master
           --presto-ref 0.299
+
+  pinned-sqlglot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install package and pinned SQLGlot audit dependencies
+        run: pip install -e ".[dev,sqlglot-audit]"
+      - name: Test SQLGlot audit helpers
+        run: pytest tests/test_audit_sqlglot.py -q
+      - name: Check pinned SQLGlot and Trino parser baseline
+        run: >-
+          python tools/audit_sqlglot.py
+          --trino-ref 483
+          --baseline plan/sqlglot_30_19_0_trino_483_audit_baseline.json
+          --fail-on-regression
+
+  sqlglot-main-drift:
+    if: github.event_name == 'workflow_dispatch' && inputs['report-sqlglot-main-drift']
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install package and SQLGlot main
+        run: |
+          pip install -e ".[dev]"
+          pip install "sqlglot @ git+https://github.com/tobymao/sqlglot.git@main"
+      - name: Report SQLGlot main drift
+        run: >-
+          python tools/audit_sqlglot.py
+          --trino-ref 483
+          --allow-version-mismatch

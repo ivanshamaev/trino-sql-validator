@@ -1,13 +1,13 @@
 use sqlparser::ast::{
     CreateFunction, CreateFunctionBody, Expr, FunctionCalledOnNull, FunctionDeterminismSpecifier,
-    FunctionReturnType, FunctionSecurity, Ident, ObjectName, OperateFunctionArg, Statement,
-    UnaryOperator, Value,
+    FunctionReturnType, FunctionSecurity, Ident, ObjectName, OperateFunctionArg, Statement, Value,
 };
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Token;
 
 use crate::dialects::trino_keywords;
+use crate::dialects::trino_types::is_trino_interval_literal;
 
 /// Trino-only SQL statements that `sqlparser` has no AST for.
 ///
@@ -244,6 +244,12 @@ fn consume_word(p: &mut Parser, word: &str) -> bool {
 }
 
 fn validate_trino_ident(ident: &Ident) -> Result<(), ParserError> {
+    if ident.quote_style.is_some_and(|quote| quote != '"') {
+        return Err(ParserError::ParserError(format!(
+            "Trino identifiers must be unquoted or double-quoted at Line: {}, Column: {}",
+            ident.span.start.line, ident.span.start.column
+        )));
+    }
     if ident.quote_style.is_none() && trino_keywords::is_reserved_word(&ident.value) {
         return Err(ParserError::ParserError(format!(
             "reserved keyword '{}' cannot be used as an unquoted Trino identifier at Line: {}, Column: {}",
@@ -727,6 +733,19 @@ fn parse_control_statement(
     arguments: &mut Vec<OperateFunctionArg>,
     expressions: &mut Vec<Expr>,
 ) -> Result<(), ParserError> {
+    let has_label = matches!(p.peek_token_ref().token, Token::Word(_))
+        && p.peek_nth_token(1).token == Token::Colon;
+    if has_label {
+        consume_control_label(p)?;
+        if !is_unquoted_word_at(p, 0, "loop")
+            && !is_unquoted_word_at(p, 0, "while")
+            && !is_unquoted_word_at(p, 0, "repeat")
+        {
+            return Err(ParserError::ParserError(
+                "routine labels apply only to LOOP, WHILE, or REPEAT".into(),
+            ));
+        }
+    }
     if consume_word(p, "return") {
         expressions.push(p.parse_expr()?);
         return Ok(());
@@ -798,8 +817,6 @@ fn parse_control_statement(
         }
         return Ok(());
     }
-
-    consume_control_label(p)?;
     if consume_word(p, "loop") {
         parse_control_list(p, &["end"], arguments, expressions, true)?;
         if !consume_word(p, "end") || !consume_word(p, "loop") {
@@ -881,6 +898,12 @@ fn parse_create_function(p: &mut Parser) -> Result<Statement, ParserError> {
                 return Err(ParserError::ParserError(
                     "Trino routine dollar bodies do not support tags".into(),
                 ));
+            }
+            if !body.value.starts_with(['\n', '\r']) {
+                return Err(ParserError::ParserError(format!(
+                    "external routine body must start with a newline at Line: {}, Column: {}",
+                    token.span.start.line, token.span.start.column
+                )));
             }
             function_body = Some(CreateFunctionBody::AsBeforeOptions {
                 body: Expr::Value(Value::DollarQuotedString(body).with_span(token.span)),
@@ -1221,22 +1244,67 @@ fn parse_alter_column_action(p: &mut Parser) -> Result<(), ParserError> {
 
 fn parse_trino_literal(p: &mut Parser) -> Result<(), ParserError> {
     let location = p.peek_token_ref().span.start;
-    let expression = p.parse_expr()?;
-    let is_literal = match expression {
-        Expr::Value(_) | Expr::TypedString(_) | Expr::Interval(_) => true,
-        Expr::UnaryOp {
-            op: UnaryOperator::Plus | UnaryOperator::Minus,
-            expr,
-        } => matches!(*expr, Expr::Value(value) if matches!(value.value, Value::Number(_, _))),
-        _ => false,
-    };
-    if !is_literal {
-        return Err(ParserError::ParserError(format!(
-            "Trino column DEFAULT requires a literal at Line: {}, Column: {}",
-            location.line, location.column
-        )));
+    match p.peek_token_ref().token.clone() {
+        Token::Word(word)
+            if matches!(word.keyword, Keyword::TRUE | Keyword::FALSE | Keyword::NULL) =>
+        {
+            p.next_token();
+        }
+        Token::Number(_, _)
+        | Token::SingleQuotedString(_)
+        | Token::UnicodeStringLiteral(_)
+        | Token::HexStringLiteral(_) => {
+            p.next_token();
+        }
+        Token::Minus => {
+            p.next_token();
+            if !matches!(p.next_token().token, Token::Number(_, _)) {
+                return Err(trino_literal_error(location.line, location.column));
+            }
+        }
+        Token::Word(word) if word.keyword == Keyword::INTERVAL => {
+            p.next_token();
+            let value_offset = usize::from(matches!(
+                p.peek_token_ref().token,
+                Token::Plus | Token::Minus
+            ));
+            if !matches!(
+                p.peek_nth_token(value_offset).token,
+                Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_)
+            ) {
+                return Err(trino_literal_error(location.line, location.column));
+            }
+            let Expr::Interval(interval) = p.parse_interval()? else {
+                return Err(trino_literal_error(location.line, location.column));
+            };
+            if !is_trino_interval_literal(&interval) {
+                return Err(trino_literal_error(location.line, location.column));
+            }
+        }
+        Token::Word(word) if word.keyword == Keyword::DOUBLE => {
+            p.next_token();
+            p.expect_keyword(Keyword::PRECISION)?;
+            parse_trino_string(p)?;
+        }
+        Token::Word(_) => {
+            if !matches!(
+                p.peek_nth_token(1).token,
+                Token::SingleQuotedString(_) | Token::UnicodeStringLiteral(_)
+            ) {
+                return Err(trino_literal_error(location.line, location.column));
+            }
+            parse_trino_identifier(p)?;
+            parse_trino_string(p)?;
+        }
+        _ => return Err(trino_literal_error(location.line, location.column)),
     }
     Ok(())
+}
+
+fn trino_literal_error(line: u64, column: u64) -> ParserError {
+    ParserError::ParserError(format!(
+        "Trino column DEFAULT requires a literal at Line: {line}, Column: {column}"
+    ))
 }
 
 fn parse_optional_execute_arguments(p: &mut Parser) -> Result<(), ParserError> {
@@ -1599,9 +1667,12 @@ mod tests {
             "DENY DELETE ON hive.default.orders TO USER alice",
             "CREATE FUNCTION testing.default.add_two(x bigint) RETURNS bigint COMMENT 'x' LANGUAGE SQL DETERMINISTIC RETURNS NULL ON NULL INPUT RETURN x + 2",
             "CREATE OR REPLACE FUNCTION f() RETURNS bigint RETURN 1",
-            "CREATE FUNCTION external_f(x bigint) RETURNS bigint LANGUAGE python AS $$return x$$",
+            "CREATE FUNCTION external_f(x bigint) RETURNS bigint LANGUAGE python AS $$\nreturn x\n$$",
             "CREATE FUNCTION compound_f(n bigint) RETURNS bigint BEGIN DECLARE a bigint DEFAULT 1; SET a = a + n; RETURN a; END",
             "CREATE FUNCTION loop_f(n bigint) RETURNS bigint BEGIN WHILE n > 0 DO SET n = n - 1; END WHILE; RETURN n; END",
+            "CREATE FUNCTION iterate_label(n bigint) RETURNS bigint BEGIN iterate: LOOP IF n <= 0 THEN LEAVE iterate; END IF; SET n = n - 1; END LOOP; RETURN n; END",
+            "CREATE FUNCTION leave_label(n bigint) RETURNS bigint BEGIN leave: LOOP IF n <= 0 THEN LEAVE leave; END IF; SET n = n - 1; END LOOP; RETURN n; END",
+            "CREATE FUNCTION set_label(n bigint) RETURNS bigint BEGIN set: LOOP IF n <= 0 THEN LEAVE set; END IF; SET n = n - 1; END LOOP; RETURN n; END",
         ] {
             assert!(parses(sql), "expected to parse: {sql}");
         }
@@ -1625,13 +1696,19 @@ mod tests {
             "CREATE FUNCTION f() RETURNS bigint COMMENT 'x'",
             "CREATE FUNCTION f() RETURNS bigint LANGUAGE SQL LANGUAGE SQL RETURN 1",
             "CREATE FUNCTION f() RETURNS bigint AS $tag$return 1$tag$",
+            "CREATE FUNCTION f() RETURNS bigint LANGUAGE python AS $$return 1$$",
             "CREATE FUNCTION f() RETURNS bigint BEGIN RETURN 1 END",
             "CREATE FUNCTION f() RETURNS bigint BEGIN IF true RETURN 1; END IF; END",
+            "CREATE FUNCTION f() RETURNS bigint BEGIN bad: RETURN 1; END",
+            "CREATE FUNCTION f() RETURNS bigint BEGIN bad: SET x = 1; RETURN 1; END",
+            "CREATE FUNCTION f() RETURNS bigint BEGIN bad: IF true THEN RETURN 1; END IF; RETURN 0; END",
+            "CREATE FUNCTION f(n bigint) RETURNS bigint BEGIN abc: WHILE n > 0 DO SET n = n - 1; END WHILE abc; RETURN n; END",
             "ALTER TABLE t SET PROPERTIES",
             "ALTER TABLE t SET PROPERTIES ()",
             "ALTER TABLE t SET PROPERTIES (x = )",
             "ALTER TABLE t SET PROPERTIES x = ",
             "ALTER TABLE t SET PROPERTIES (x = 1)",
+            "ALTER TABLE t SET PROPERTIES x = 1, 'bad key' = 2",
             "ALTER TABLE IF EXISTS t SET PROPERTIES x = 1",
             "ALTER MATERIALIZED VIEW t SET PROPERTIES (x = 1)",
             "ALTER MATERIALIZED VIEW IF EXISTS t SET PROPERTIES x = 1",

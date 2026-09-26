@@ -1,26 +1,54 @@
 # Trino SQL coverage and validation boundaries
 
-Status: v0.18.0, Trino 483 pin.
+Status: v0.19.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
 
 ## Measured coverage
 
-- All 18 files in `tests/fixtures` have explicit outcome, statement-count,
-  warning, and feature-profile expectations. All 523 statements from positive
+- All 48 SQL files in `tests/fixtures` have explicit outcome, statement-count,
+  warning, and feature-profile expectations. All 553 statements from positive
   non-empty fixtures are also validated independently.
 - `trino_invalid_sql.sql` contributes 236 independent parser-negative cases;
   each is passed to `validate()` separately rather than as multi-statement SQL.
-  Trino 483 and v0.18.0 both reject all 236, compared with 201/236 rejections in
+  Trino 483 and v0.19.0 both reject all 236, compared with 201/236 rejections in
   v0.17.0.
 - The 57-case composition matrix exercises query features under their supported
   root, EXPLAIN, PREPARE, CTAS, CREATE VIEW, and INSERT contexts.
 - The expanded pinned audit extracts ordinary Java strings and text blocks. It
-  currently accepts 479/484 Trino statements, 231/238 expressions, 68/68 types,
+  currently accepts 481/484 Trino statements, 231/238 expressions, 68/68 types,
   one Functions statement, five Routines statements, and one standalone function
   specification. It rejects 23/23 direct negative statements and 52/55
   statement error-suite inputs; the retained differences are baseline-approved.
 - Known audit differences are identified by content hash in
   `trino_483_audit_baseline.json`. A new mismatch or a smaller extracted corpus
   fails `--fail-on-regression`; PrestoDB remains comparison-only.
+
+## Differential SQLGlot audit
+
+SQLGlot 30.19.0 is pinned only in the `sqlglot-audit` optional dependency. It is
+not imported by the package and does not affect `ValidationResult.valid`.
+`tools/audit_sqlglot.py` classifies each case as `parsed_ast`,
+`command_fallback`, `parse_error`, or `token_error`; treating `Command` as
+ordinary parser success would conceal unparsed statement tails.
+
+The current SQLGlot Trino test file was also inventoried at revision
+`d01e9461a7a3fcbe50a965c7a2ddf55d41aca97d`. Twenty-seven representative cases
+from syntax families absent in this project were adapted into native regression
+tests only after Trino 483 verification. Generator-only cross-dialect cases and
+permissive `Command` fallbacks are deliberately excluded from positive coverage.
+
+On the stable fixtures SQLGlot produces a full AST for 441/553 prepared positive
+statements and errors for 132/236 negative cases; 103 positives and 22 negatives
+fall back to `Command`. On Trino 483 positive statements it produces 255 full
+ASTs, 199 `Command` fallbacks, and 30 errors. The detailed denominators, corpus
+hashes, state counts, and outcome hashes are pinned in
+`sqlglot_30_19_0_trino_483_audit_baseline.json`.
+
+An additional native `io.trino:trino-parser:483` run checked 3388 unique
+current-valid statements: 3378 parsed, while ten differences reduced to three
+fixed false-accept families plus intentional BOM and Trino-master compatibility.
+External dollar bodies now require an opening newline; empty `ROLLUP()`/`CUBE()`
+and their unquoted scalar-call forms are rejected. Quoted function names and
+non-empty grouping-set neighbors remain valid.
 
 These are corpus measurements, not a claim of complete Trino grammar or semantic
 coverage. Connector state, names, overload resolution, arity, types, permissions,

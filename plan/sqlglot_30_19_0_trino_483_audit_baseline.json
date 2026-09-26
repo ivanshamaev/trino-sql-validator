@@ -1,0 +1,129 @@
+{
+  "sqlglot_version": "30.19.0",
+  "trino_repository": "trinodb/trino",
+  "trino_revision": "50b0b50b75abd47f830b7805ee1b51716eb4065e",
+  "trino_content_sha256": {
+    "errors": "812558fb3a95ef6df51dad817ad753369e48f33297ede728e94c2aaae58eb9bc",
+    "functions": "2e10d20b3497ada270d11ef4d075b74755900ab3c4c13c0a31bc604c205b3f8e",
+    "parser": "61dda72023590a68b0c987bec0818fb6de1f8a5074c5a42adc41f5b833f1cece",
+    "routines": "9156e85ece8a1e91225211092c3ac020cea86bbde82b30e7b816d96439eba8fe",
+    "types": "281952cc97f531b69e44ab06673b3ebda4908a049d0e934786b34e65b411b998"
+  },
+  "cases": {
+    "fixture_negative": {
+      "minimum_total": 236,
+      "corpus_sha256": "65c1070c1bf10454b04c2d95615ff3cbf47aced1a887d5b3fc10af8d6177d1ce",
+      "outcome_sha256": "d43114e04dee041367c24d7132da4e399b3bcb8abc9ab8780421a956d5ccf04c",
+      "state_counts": {
+        "command_fallback": 22,
+        "parse_error": 127,
+        "parsed_ast": 82,
+        "token_error": 5
+      }
+    },
+    "fixture_positive_prepared": {
+      "minimum_total": 553,
+      "corpus_sha256": "1615d0c4c187f7b10af785c0c7325747ab4b913bd9885974bafdb1a92ab469e7",
+      "outcome_sha256": "0226f5a082a217693c5f3a4776c9cd5195e3c9f19b2537b1d418e8965bfce777",
+      "state_counts": {
+        "command_fallback": 103,
+        "parse_error": 9,
+        "parsed_ast": 441
+      }
+    },
+    "fixture_positive_raw": {
+      "minimum_total": 553,
+      "corpus_sha256": "8011b3bfe1643d8acaf3d4d3665bd6b9b47cb332c0e1d9ba5105830f79678477",
+      "outcome_sha256": "4ffb28111aaa450e9b9fe65f428891c492c48ff33239bf3db93d2a57b25253c8",
+      "state_counts": {
+        "command_fallback": 103,
+        "parse_error": 10,
+        "parsed_ast": 440
+      }
+    },
+    "trino_negative_expressions_error_suite": {
+      "minimum_total": 1,
+      "corpus_sha256": "f8bf4e3161e6b5927bb97c25bd278a235793f7dcff7f5372b693602fab09e53b",
+      "outcome_sha256": "8b5ddf742b62677f9673fd9dbb16637e05084e612b4de5dd2fb7947428d5f005",
+      "state_counts": {
+        "parsed_ast": 1
+      }
+    },
+    "trino_negative_statements_direct": {
+      "minimum_total": 23,
+      "corpus_sha256": "80beb10aa609d0bf9f1d6ba7804bd63cb19adbc60ff2ac875d7bd5d6f58a758c",
+      "outcome_sha256": "281055d1ed137ccce871376ddff398135c095abe047566b5346419c4d308ac76",
+      "state_counts": {
+        "command_fallback": 18,
+        "parse_error": 4,
+        "token_error": 1
+      }
+    },
+    "trino_negative_statements_error_suite": {
+      "minimum_total": 55,
+      "corpus_sha256": "fdf7883411551aaa5490f72850fd1f09672503ef3046d6b508da39949af12331",
+      "outcome_sha256": "3788a9fd8c9d98d240f2d47f687e1e78bf36c0da7f31fe9d6187ddf624f008e5",
+      "state_counts": {
+        "command_fallback": 5,
+        "parse_error": 22,
+        "parsed_ast": 27,
+        "token_error": 1
+      }
+    },
+    "trino_positive_expressions": {
+      "minimum_total": 238,
+      "corpus_sha256": "10b805be3fe7db44032775417331f6ed9f08c601869d29d8bc2dd9bc763354e3",
+      "outcome_sha256": "8d1542be79d986a4a8c062067c1969c86b1421d904067ef41d7a72d70f395989",
+      "state_counts": {
+        "parse_error": 16,
+        "parsed_ast": 221,
+        "token_error": 1
+      }
+    },
+    "trino_positive_function_specifications": {
+      "minimum_total": 1,
+      "corpus_sha256": "8316727b88c3a5f8534d2a87504ec044402b9b57c3b7ff76658c2dd07253f70b",
+      "outcome_sha256": "c11aa2d814dba32791d454245a440963673ba6e4aeb4960149fbaf8a98d3a58c",
+      "state_counts": {
+        "parsed_ast": 1
+      }
+    },
+    "trino_positive_function_statements": {
+      "minimum_total": 1,
+      "corpus_sha256": "817e6461a68de5d03ba811999644e9b883a5707997782b89e7a45321ebd69ee4",
+      "outcome_sha256": "602f83a4c8bb1eef98aab5d3bca3eef5b01c8138992e731b92583d8860d15020",
+      "state_counts": {
+        "command_fallback": 1
+      }
+    },
+    "trino_positive_routine_statements": {
+      "minimum_total": 5,
+      "corpus_sha256": "571579d423d396a1c3f6335e8a6fdb0d3c96a3d7fd2ecd9aeb8f329901859b1a",
+      "outcome_sha256": "91fae9ce1df44b59f879085ede0b7806e1c5e74161a01fefaf3c5326e4e3266a",
+      "state_counts": {
+        "command_fallback": 1,
+        "parse_error": 1,
+        "parsed_ast": 3
+      }
+    },
+    "trino_positive_statements": {
+      "minimum_total": 484,
+      "corpus_sha256": "c87d0f22a6eec3ae8ecc4d27157dedbe740905cb0d8057861aa2703b9693b2c7",
+      "outcome_sha256": "b8a160bd8d6772d073b856315eb5bf9a7c152d6fb1b8c4f98f6f398ad0c4fe37",
+      "state_counts": {
+        "command_fallback": 199,
+        "parse_error": 30,
+        "parsed_ast": 255
+      }
+    },
+    "trino_positive_types": {
+      "minimum_total": 68,
+      "corpus_sha256": "ffe823fca80fd18ff262e6883f009ff0bf9ec2a86ffe61d7f418b6a502941c93",
+      "outcome_sha256": "8156762ef7afd74566bbbf67d12651f2ccfc6fc2a1d33a6692a24118e56eaa4e",
+      "state_counts": {
+        "parse_error": 20,
+        "parsed_ast": 48
+      }
+    }
+  }
+}

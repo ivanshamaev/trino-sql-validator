@@ -38,6 +38,8 @@ def test_generic_constructs_are_rejected_only_by_trino(sql: str) -> None:
         "SELECT 1 OFFSET ?",
         "ALTER TABLE t ADD COLUMN x BIGINT DEFAULT -1",
         "ALTER TABLE t ADD COLUMN x VARCHAR DEFAULT '+33606060606'",
+        "ALTER TABLE t ADD COLUMN x VARCHAR DEFAULT NULL NOT NULL",
+        "ALTER TABLE t ADD COLUMN x BIGINT DEFAULT 1 NOT NULL",
         "CREATE TABLE t(x DATE DEFAULT DATE '2026-01-01')",
     ],
 )
@@ -56,3 +58,34 @@ def test_invalid_column_default_reports_original_position() -> None:
     assert result.error is not None
     assert result.error.line == 1
     assert result.error.column == sql.index("missing_fn") + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "ALTER TABLE t ADD COLUMN x BIGINT DEFAULT +1",
+        "CREATE TABLE t(x BIGINT DEFAULT +1)",
+        "ALTER TABLE t ADD COLUMN x BIGINT DEFAULT CURRENT_USER",
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL missing_fn(1) DAY",
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL -1 DAY",
+        "CREATE TABLE t(x INTERVAL DAY DEFAULT INTERVAL missing_fn(1) DAY)",
+        "SELECT INTERVAL '1' HOUR TO YEAR",
+    ],
+)
+def test_column_defaults_follow_trino_literal_grammar(sql: str) -> None:
+    assert validate(sql).valid is False
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL '1' DAY NOT NULL",
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL -'1' DAY NOT NULL",
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL +'1' DAY NOT NULL",
+        "ALTER TABLE t ADD COLUMN x INTERVAL DAY DEFAULT INTERVAL '1' NOT NULL",
+        "ALTER TABLE t ADD COLUMN x DOUBLE DEFAULT DOUBLE PRECISION 'NaN' NOT NULL",
+        "SELECT INTERVAL '1' WEEK",
+    ],
+)
+def test_column_default_literal_neighbors_remain_valid(sql: str) -> None:
+    assert validate(sql).valid is True

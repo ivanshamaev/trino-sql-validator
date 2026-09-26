@@ -56,7 +56,7 @@ SUPPORTED_SQL = {
     """,
     "group_by_auto": "SELECT mktsegment, sum(acctbal) FROM shipping GROUP BY AUTO",
     "group_by_quantifier": "SELECT a, b, sum(c) FROM t GROUP BY DISTINCT ROLLUP ((a, b), c)",
-    "empty_grouping_elements": "SELECT 1 GROUP BY ROLLUP (), CUBE ()",
+    "empty_grouping_sets": "SELECT 1 GROUP BY ROLLUP (()), CUBE (())",
     "at_local": "SELECT timestamp '2024-01-01 12:00:00' AT LOCAL",
     "scalar_values_relation": "SELECT * FROM LATERAL (VALUES 1, 2)",
     "corresponding": "SELECT 1 AS x UNION CORRESPONDING BY (x) SELECT 2 AS x",

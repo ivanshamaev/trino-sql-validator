@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-09-26
+
+### Added
+
+- Added a pinned, optional SQLGlot 30.19.0 differential-audit tool and baseline
+  for all 553 positive fixtures, 236 negative fixtures, and the extracted Trino
+  483 parser corpus. SQLGlot outcomes distinguish full ASTs, `Command` fallback,
+  parse errors, and token errors without adding a production dependency.
+- Added scheduled CI coverage for the pinned SQLGlot baseline and an optional,
+  non-blocking manual drift comparison against SQLGlot `main`.
+- Audited every independently valid project SQL statement against the native
+  Trino 483 parser and documented intentional forward-compatibility differences.
+- Ported 27 native-Trino-verified cases from previously uncovered syntax
+  families in SQLGlot's Trino tests, with pinned source provenance and five
+  paired negative regressions.
+- Added 30 data-mart SQL fixtures verified independently by the native Trino 483
+  parser and by the public validator without catalog warnings.
+
+### Fixed
+
+- Accepted Trino CTAS option ordering with `COMMENT`, table properties,
+  `AS query`, and terminal `WITH [NO] DATA`, preserving warnings in properties
+  and the query.
+- Parsed column default literals without consuming a following `NOT NULL`, so
+  `ALTER TABLE ... ADD COLUMN ... DEFAULT NULL NOT NULL` and its numeric,
+  string, typed, and interval neighbors validate correctly.
+- Rejected external routine dollar bodies that do not begin with a newline,
+  empty `ROLLUP()`/`CUBE()` grouping elements, and unquoted scalar calls to
+  those grouping keywords, matching the native Trino parser.
+- Accepted `JSON_QUERY` `KEEP/OMIT QUOTES [ON SCALAR STRING]` clauses and
+  contextual routine labels named `iterate`, `leave`, or `set`; rejected
+  single-quoted property keys accepted only by SQLGlot's `Command` fallback.
+- Replaced the unsupported `QUALIFY` data-mart query with a CTE/window filter and
+  corrected IP-network expressions to documented CIDR strings and IPADDRESS casts.
+
 ## [0.18.0] - 2026-09-25
 
 ### Added

@@ -1,7 +1,9 @@
 use core::ops::ControlFlow;
 use std::cmp::Reverse;
 
-use sqlparser::ast::{ArrayElemTypeDef, BinaryOperator, ColumnOption, DataType, FromTable};
+use sqlparser::ast::{
+    ArrayElemTypeDef, BinaryOperator, ColumnOption, DataType, DateTimeField, FromTable, Interval,
+};
 use sqlparser::ast::{Expr, FunctionArgExpr, FunctionArgOperator, FunctionArguments, Ident};
 use sqlparser::ast::{FunctionArg, FunctionReturnType, ObjectName, SchemaName, Spanned};
 use sqlparser::ast::{JoinConstraint, JoinOperator, LimitClause, Query, Select, SelectItem};
@@ -979,26 +981,13 @@ fn validate_trino_create_table_forms(tokens: &[TokenWithSpan]) -> Result<(), Par
             continue;
         };
         let definition = next_significant(tokens, after_name, end);
-        let valid_definition = definition.is_some_and(|index| {
-            if tokens[index].token == Token::LParen {
-                return matching_rparen(tokens, index)
-                    .is_some_and(|close| next_significant(tokens, index + 1, close).is_some());
-            }
-            if is_unquoted_word(&tokens[index], "as") || is_unquoted_word(&tokens[index], "like") {
-                return true;
-            }
-            if !is_unquoted_word(&tokens[index], "with") {
-                return false;
-            }
-            let Some(open) = next_significant(tokens, index + 1, end) else {
-                return false;
-            };
-            let Some(close) = matching_rparen(tokens, open) else {
-                return false;
-            };
-            next_significant(tokens, close + 1, end)
-                .is_some_and(|next| is_unquoted_word(&tokens[next], "as"))
-        });
+        let valid_definition = match definition {
+            Some(index) if tokens[index].token == Token::LParen => matching_rparen(tokens, index)
+                .is_some_and(|close| next_significant(tokens, index + 1, close).is_some()),
+            Some(index) if is_unquoted_word(&tokens[index], "like") => true,
+            Some(_) => create_table_as_prefix(tokens, after_name, end)?.is_some(),
+            None => false,
+        };
         if !valid_definition {
             return Err(syntax_error(
                 &tokens[name],
@@ -1008,6 +997,69 @@ fn validate_trino_create_table_forms(tokens: &[TokenWithSpan]) -> Result<(), Par
         start = end.saturating_add(1);
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct CreateTableAsPrefix {
+    comment: Option<(usize, usize)>,
+}
+
+fn create_table_as_prefix(
+    tokens: &[TokenWithSpan],
+    name_end: usize,
+    end: usize,
+) -> Result<Option<CreateTableAsPrefix>, ParserError> {
+    let Some(mut cursor) = next_significant(tokens, name_end, end) else {
+        return Ok(None);
+    };
+    if !(is_unquoted_word(&tokens[cursor], "comment")
+        || is_unquoted_word(&tokens[cursor], "with")
+        || is_unquoted_word(&tokens[cursor], "as"))
+    {
+        return Ok(None);
+    }
+    let mut comment = None;
+    if is_unquoted_word(&tokens[cursor], "comment") {
+        let value = next_significant(tokens, cursor + 1, end)
+            .ok_or_else(|| syntax_error(&tokens[cursor], "TABLE COMMENT requires a string"))?;
+        if !is_single_quoted_string(&tokens[value]) {
+            return Err(syntax_error(
+                &tokens[value],
+                "TABLE COMMENT requires a string",
+            ));
+        }
+        comment = Some((cursor, value + 1));
+        cursor = next_significant(tokens, value + 1, end).ok_or_else(|| {
+            syntax_error(&tokens[value], "CREATE TABLE AS requires AS and a query")
+        })?;
+    }
+    if is_unquoted_word(&tokens[cursor], "with") {
+        let open = next_significant(tokens, cursor + 1, end)
+            .ok_or_else(|| syntax_error(&tokens[cursor], "TABLE WITH requires properties"))?;
+        if tokens[open].token != Token::LParen {
+            return Err(syntax_error(&tokens[open], "TABLE WITH requires '('"));
+        }
+        let close = matching_rparen(tokens, open)
+            .ok_or_else(|| syntax_error(&tokens[open], "unterminated table properties"))?;
+        if next_significant(tokens, open + 1, close).is_none() {
+            return Err(syntax_error(
+                &tokens[open],
+                "TABLE WITH requires properties",
+            ));
+        }
+        cursor = next_significant(tokens, close + 1, end).ok_or_else(|| {
+            syntax_error(&tokens[close], "CREATE TABLE AS requires AS and a query")
+        })?;
+    }
+    if !is_unquoted_word(&tokens[cursor], "as") {
+        return Err(syntax_error(
+            &tokens[cursor],
+            "CREATE TABLE options must be followed by AS",
+        ));
+    }
+    next_significant(tokens, cursor + 1, end)
+        .ok_or_else(|| syntax_error(&tokens[cursor], "CREATE TABLE AS requires a query"))?;
+    Ok(Some(CreateTableAsPrefix { comment }))
 }
 
 fn create_table_name_end(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<usize> {
@@ -1269,6 +1321,10 @@ fn normalize_create_table_extensions(
                     ));
                 }
                 blank_non_whitespace(tokens, comment, value + 1);
+            }
+        } else if let Some(prefix) = create_table_as_prefix(tokens, name_end, end)? {
+            if let Some((start, end)) = prefix.comment {
+                blank_non_whitespace(tokens, start, end);
             }
         }
         let last = previous_significant(tokens, end);
@@ -1682,44 +1738,104 @@ fn normalize_json_query_wrappers(tokens: &mut [TokenWithSpan]) -> Result<(), Par
         let Some(close) = matching_rparen(tokens, open) else {
             continue;
         };
-        let Some(wrapper) = find_top_level_word(tokens, open + 1, close, "with")
+        if let Some(wrapper) = find_top_level_word(tokens, open + 1, close, "with")
             .or_else(|| find_top_level_word(tokens, open + 1, close, "without"))
-        else {
-            continue;
-        };
-        let mut cursor = next_significant(tokens, wrapper + 1, close)
-            .ok_or_else(|| syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause"))?;
-        if is_unquoted_word(&tokens[cursor], "conditional")
-            || is_unquoted_word(&tokens[cursor], "unconditional")
         {
-            cursor = next_significant(tokens, cursor + 1, close)
+            let mut cursor = next_significant(tokens, wrapper + 1, close)
                 .ok_or_else(|| syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause"))?;
+            if is_unquoted_word(&tokens[cursor], "conditional")
+                || is_unquoted_word(&tokens[cursor], "unconditional")
+            {
+                cursor = next_significant(tokens, cursor + 1, close).ok_or_else(|| {
+                    syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause")
+                })?;
+            }
+            if is_unquoted_word(&tokens[cursor], "array") {
+                cursor = next_significant(tokens, cursor + 1, close).ok_or_else(|| {
+                    syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause")
+                })?;
+            }
+            if !is_unquoted_word(&tokens[cursor], "wrapper") {
+                return Err(syntax_error(
+                    &tokens[cursor],
+                    "wrapper clause requires WRAPPER",
+                ));
+            }
+            blank_non_whitespace(tokens, wrapper, cursor + 1);
         }
-        if is_unquoted_word(&tokens[cursor], "array") {
-            cursor = next_significant(tokens, cursor + 1, close)
-                .ok_or_else(|| syntax_error(&tokens[wrapper], "incomplete JSON wrapper clause"))?;
+        let mut quote_clause = None;
+        let mut depth = 0usize;
+        for quote in open + 1..close {
+            match tokens[quote].token {
+                Token::LParen | Token::LBracket | Token::LBrace => {
+                    depth += 1;
+                    continue;
+                }
+                Token::RParen | Token::RBracket | Token::RBrace if depth > 0 => {
+                    depth -= 1;
+                    continue;
+                }
+                _ if depth > 0 => continue,
+                _ => {}
+            }
+            if !is_unquoted_word(&tokens[quote], "keep")
+                && !is_unquoted_word(&tokens[quote], "omit")
+            {
+                continue;
+            }
+            let Some(quotes) = next_significant(tokens, quote + 1, close) else {
+                continue;
+            };
+            if !is_unquoted_word(&tokens[quotes], "quotes") {
+                continue;
+            }
+            if quote_clause.is_some() {
+                return Err(syntax_error(
+                    &tokens[quote],
+                    "JSON_QUERY accepts only one quotes clause",
+                ));
+            }
+            let mut end = quotes + 1;
+            if let Some(on) = next_significant(tokens, quotes + 1, close)
+                .filter(|index| is_unquoted_word(&tokens[*index], "on"))
+            {
+                let scalar = next_significant(tokens, on + 1, close).ok_or_else(|| {
+                    syntax_error(&tokens[on], "JSON_QUERY ON requires SCALAR STRING")
+                })?;
+                let string = next_significant(tokens, scalar + 1, close).ok_or_else(|| {
+                    syntax_error(&tokens[scalar], "JSON_QUERY ON requires SCALAR STRING")
+                })?;
+                if !is_unquoted_word(&tokens[scalar], "scalar")
+                    || !is_unquoted_word(&tokens[string], "string")
+                {
+                    return Err(syntax_error(
+                        &tokens[scalar],
+                        "JSON_QUERY ON requires SCALAR STRING",
+                    ));
+                }
+                end = string + 1;
+            }
+            quote_clause = Some((quote, end));
         }
-        if !is_unquoted_word(&tokens[cursor], "wrapper") {
-            return Err(syntax_error(
-                &tokens[cursor],
-                "wrapper clause requires WRAPPER",
-            ));
+        if let Some((start, end)) = quote_clause {
+            blank_non_whitespace(tokens, start, end);
         }
-        blank_non_whitespace(tokens, wrapper, cursor + 1);
     }
     Ok(())
 }
 
-fn normalize_json_value_behaviors(
+fn normalize_json_behaviors(
     tokens: &mut [TokenWithSpan],
     dialect: &dyn Dialect,
 ) -> Result<Vec<Statement>, ParserError> {
     let mut metadata = Vec::new();
-    for json_value in 0..tokens.len() {
-        if !is_unquoted_word(&tokens[json_value], "json_value") {
+    for json_function in 0..tokens.len() {
+        let is_json_value = is_unquoted_word(&tokens[json_function], "json_value");
+        let is_json_query = is_unquoted_word(&tokens[json_function], "json_query");
+        if !is_json_value && !is_json_query {
             continue;
         }
-        let Some(open) = next_significant(tokens, json_value + 1, tokens.len()) else {
+        let Some(open) = next_significant(tokens, json_function + 1, tokens.len()) else {
             continue;
         };
         if tokens[open].token != Token::LParen {
@@ -1731,6 +1847,8 @@ fn normalize_json_value_behaviors(
         let mut depth = 0usize;
         let mut last_default = None;
         let mut ranges = Vec::new();
+        let mut seen_empty = false;
+        let mut seen_error = false;
         for on in open + 1..close {
             match tokens[on].token {
                 Token::LParen | Token::LBracket | Token::LBrace => {
@@ -1743,7 +1861,7 @@ fn normalize_json_value_behaviors(
                 }
                 _ => {}
             }
-            if depth == 0 && is_unquoted_word(&tokens[on], "default") {
+            if depth == 0 && is_json_value && is_unquoted_word(&tokens[on], "default") {
                 last_default = Some(on);
                 continue;
             }
@@ -1758,6 +1876,18 @@ fn normalize_json_value_behaviors(
             {
                 continue;
             }
+            let seen = if is_unquoted_word(&tokens[condition], "empty") {
+                &mut seen_empty
+            } else {
+                &mut seen_error
+            };
+            if *seen {
+                return Err(syntax_error(
+                    &tokens[on],
+                    "JSON behavior may be specified only once",
+                ));
+            }
+            *seen = true;
             let Some(previous) = previous_significant(tokens, on) else {
                 continue;
             };
@@ -1767,6 +1897,18 @@ fn normalize_json_value_behaviors(
                 ranges.push((previous, condition + 1));
                 last_default = None;
                 continue;
+            }
+            if is_json_query
+                && (is_unquoted_word(&tokens[previous], "array")
+                    || is_unquoted_word(&tokens[previous], "object"))
+            {
+                let Some(empty) = previous_significant(tokens, previous) else {
+                    continue;
+                };
+                if is_unquoted_word(&tokens[empty], "empty") {
+                    ranges.push((empty, condition + 1));
+                    continue;
+                }
             }
             let Some(default) = last_default.take() else {
                 continue;
@@ -2381,11 +2523,10 @@ fn is_grouping_element_position(tokens: &[TokenWithSpan], before: usize) -> bool
     false
 }
 
-fn normalize_empty_grouping_elements(tokens: &mut Vec<TokenWithSpan>) {
-    for grouping in (0..tokens.len()).rev() {
-        if (!is_unquoted_word(&tokens[grouping], "rollup")
-            && !is_unquoted_word(&tokens[grouping], "cube"))
-            || !is_grouping_element_position(tokens, grouping)
+fn validate_trino_grouping_elements(tokens: &[TokenWithSpan]) -> Result<(), ParserError> {
+    for grouping in 0..tokens.len() {
+        if !is_unquoted_word(&tokens[grouping], "rollup")
+            && !is_unquoted_word(&tokens[grouping], "cube")
         {
             continue;
         }
@@ -2395,17 +2536,23 @@ fn normalize_empty_grouping_elements(tokens: &mut Vec<TokenWithSpan>) {
         if tokens[open].token != Token::LParen {
             continue;
         }
+        if !is_grouping_element_position(tokens, grouping) {
+            return Err(syntax_error(
+                &tokens[grouping],
+                "ROLLUP and CUBE are grouping elements, not scalar functions",
+            ));
+        }
         let Some(close) = matching_rparen(tokens, open) else {
             continue;
         };
-        if next_significant(tokens, open + 1, close).is_some() {
-            continue;
+        if next_significant(tokens, open + 1, close).is_none() {
+            return Err(syntax_error(
+                &tokens[grouping],
+                "ROLLUP and CUBE require at least one grouping set",
+            ));
         }
-        tokens.insert(
-            open + 1,
-            word_with_span(&tokens[grouping], "NULL", Keyword::NULL),
-        );
     }
+    Ok(())
 }
 
 fn normalize_pivot_group_by(
@@ -4817,13 +4964,74 @@ fn collect_source_type_names(tokens: &[TokenWithSpan]) -> Vec<Ident> {
 
 fn is_trino_literal(expr: &Expr) -> bool {
     match expr {
-        Expr::Value(_) | Expr::TypedString(_) | Expr::Interval(_) => true,
+        Expr::Value(value) => matches!(
+            value.value,
+            Value::Number(_, _)
+                | Value::SingleQuotedString(_)
+                | Value::UnicodeStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Boolean(_)
+                | Value::Null
+        ),
+        Expr::TypedString(_) => true,
+        Expr::Interval(interval) => is_trino_interval_literal(interval),
         Expr::UnaryOp {
-            op: UnaryOperator::Plus | UnaryOperator::Minus,
+            op: UnaryOperator::Minus,
             expr,
         } => {
             matches!(expr.as_ref(), Expr::Value(value) if matches!(value.value, Value::Number(_, _)))
         }
+        _ => false,
+    }
+}
+
+pub(super) fn is_trino_interval_literal(interval: &Interval) -> bool {
+    is_trino_interval_value(interval)
+        && matches!(
+            (interval.leading_field.clone(), interval.last_field.clone()),
+            (None, None)
+                | (Some(DateTimeField::Year), None | Some(DateTimeField::Month))
+                | (Some(DateTimeField::Month), None)
+                | (
+                    Some(DateTimeField::Day),
+                    None | Some(DateTimeField::Hour)
+                        | Some(DateTimeField::Minute)
+                        | Some(DateTimeField::Second)
+                )
+                | (
+                    Some(DateTimeField::Hour),
+                    None | Some(DateTimeField::Minute) | Some(DateTimeField::Second)
+                )
+                | (
+                    Some(DateTimeField::Minute),
+                    None | Some(DateTimeField::Second)
+                )
+                | (Some(DateTimeField::Second), None)
+        )
+}
+
+fn is_trino_interval_expression(interval: &Interval) -> bool {
+    is_trino_interval_value(interval)
+        && (interval.last_field.is_none() || is_trino_interval_literal(interval))
+}
+
+fn is_trino_interval_value(interval: &Interval) -> bool {
+    match interval.value.as_ref() {
+        Expr::Value(value) => matches!(
+            value.value,
+            Value::SingleQuotedString(_) | Value::UnicodeStringLiteral(_)
+        ),
+        Expr::UnaryOp {
+            op: UnaryOperator::Plus | UnaryOperator::Minus,
+            expr,
+        } => matches!(
+            expr.as_ref(),
+            Expr::Value(value)
+                if matches!(
+                    value.value,
+                    Value::SingleQuotedString(_) | Value::UnicodeStringLiteral(_)
+                )
+        ),
         _ => false,
     }
 }
@@ -5641,6 +5849,14 @@ fn validate_trino_ast(
                 Expr::Cast { data_type, .. } if self.validate_data_type(data_type).is_break() => {
                     return ControlFlow::Break(());
                 }
+                Expr::Interval(interval) if !is_trino_interval_expression(interval) => {
+                    let start = interval.value.span().start;
+                    return self.reject_at(
+                        "invalid Trino interval literal",
+                        start.line,
+                        start.column,
+                    );
+                }
                 _ => {}
             }
             if matches!(expr, Expr::ILike { .. })
@@ -6239,6 +6455,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     validate_trino_typed_literals(&tokens)?;
     validate_trino_table_samples(&tokens)?;
     validate_trino_create_table_forms(&tokens)?;
+    validate_trino_grouping_elements(&tokens)?;
     validate_trino_reserved_expression_starts(&tokens)?;
     validate_trino_count_distinct_wildcard(&tokens)?;
     let mut compatibility_metadata = normalize_create_table_extensions(&mut tokens, dialect)?;
@@ -6247,7 +6464,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_json_table_scalar_columns(&mut tokens)?;
     normalize_json_object_pairs(&mut tokens)?;
     normalize_json_query_wrappers(&mut tokens)?;
-    compatibility_metadata.extend(normalize_json_value_behaviors(&mut tokens, dialect)?);
+    compatibility_metadata.extend(normalize_json_behaviors(&mut tokens, dialect)?);
     normalize_prepare_from(&mut tokens);
     normalize_nested_row_types(&mut tokens);
     normalize_array_parenthesis_types(&mut tokens);
@@ -6258,7 +6475,6 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_corresponding_set_operations(&mut tokens)?;
     normalize_group_by_quantifiers(&mut tokens)?;
     normalize_group_by_auto(&mut tokens);
-    normalize_empty_grouping_elements(&mut tokens);
     compatibility_metadata.extend(normalize_pivot_group_by(&mut tokens, dialect)?);
     normalize_nearest_relations(&mut tokens, dialect)?;
     normalize_ipaddress_literals(&mut tokens);
@@ -6431,21 +6647,14 @@ mod tests {
         .is_ok());
         assert!(parse_sql(&dialect, "SELECT a, sum(b) FROM t GROUP BY ALL").is_err());
 
-        let mut tokens = Tokenizer::new(&dialect, "SELECT 1 GROUP BY ROLLUP ()")
-            .tokenize_with_location()
-            .unwrap();
-        let rollup = tokens
-            .iter()
-            .position(|token| is_unquoted_word(token, "rollup"))
-            .unwrap();
-        assert!(is_grouping_element_position(&tokens, rollup));
-        normalize_empty_grouping_elements(&mut tokens);
-        assert!(Parser::new(&dialect)
-            .with_tokens_with_locations(tokens)
-            .parse_statements()
-            .is_ok());
-        assert!(parse_sql(&dialect, "SELECT 1 GROUP BY CUBE ()").is_ok());
+        assert!(parse_sql(&dialect, "SELECT 1 GROUP BY ROLLUP ()").is_err());
+        assert!(parse_sql(&dialect, "SELECT 1 GROUP BY CUBE ()").is_err());
+        assert!(parse_sql(&dialect, "SELECT 1 GROUP BY ROLLUP (())").is_ok());
+        assert!(parse_sql(&dialect, "SELECT 1 GROUP BY CUBE (())").is_ok());
         assert!(parse_sql(&dialect, "SELECT 1 GROUP BY GROUPING SETS ()").is_err());
+        assert!(parse_sql(&dialect, "SELECT rollup()").is_err());
+        assert!(parse_sql(&dialect, "SELECT cube()").is_err());
+        assert!(parse_sql(&dialect, "SELECT \"rollup\"()").is_ok());
     }
 
     #[test]
@@ -6477,12 +6686,17 @@ mod tests {
             "CREATE TABLE t (items ARRAY(VARCHAR)) COMMENT 'items' WITH (format = 'PARQUET')",
             "CREATE TABLE t (LIKE source INCLUDING PROPERTIES)",
             "CREATE TABLE t(x, y) AS SELECT a, b FROM source WITH NO DATA",
+            "CREATE TABLE t COMMENT 'copy' WITH (format = 'PARQUET') AS SELECT 1 WITH DATA",
             "ANALYZE t WITH (sample = 10)",
             "CREATE VIEW v COMMENT 'v' SECURITY DEFINER AS SELECT 1",
             "SELECT ALL, SOME, ANY FROM t",
             "TABLE nation ORDER BY nationkey LIMIT 3",
             "SELECT JSON_VALUE(payload, 'lax $.n' RETURNING integer DEFAULT 0 ON EMPTY) FROM events",
             "SELECT JSON_QUERY(payload, 'lax $' WITH CONDITIONAL ARRAY WRAPPER) FROM events",
+            "SELECT JSON_QUERY(payload, 'lax $' OMIT QUOTES NULL ON ERROR) FROM events",
+            "SELECT JSON_QUERY(payload, 'lax $' KEEP QUOTES) FROM events",
+            "SELECT JSON_QUERY(payload, 'lax $' OMIT QUOTES ON SCALAR STRING) FROM events",
+            "SELECT JSON_QUERY(payload, 'lax $' WITH UNCONDITIONAL WRAPPER KEEP QUOTES) FROM events",
             "SELECT JSON_OBJECT('k' VALUE 1, KEY 'name' VALUE 'x'), JSON_OBJECT(KEY 'a' VALUE NULL NULL ON NULL)",
             "SELECT JSON_OBJECT('k' : 1, 'name' : 'x')",
             "SELECT * FROM JSON_TABLE(col, 'lax $' COLUMNS(name varchar FORMAT JSON PATH 'lax $.name' WITH WRAPPER KEEP QUOTES NULL ON EMPTY, regions varchar FORMAT JSON ENCODING UTF16 PATH 'lax $.regions' EMPTY ARRAY ON EMPTY EMPTY OBJECT ON ERROR) EMPTY ON ERROR)",
@@ -6518,6 +6732,10 @@ mod tests {
         for sql in [
             "CREATE TABLE t (c VARCHAR WITH ())",
             "CREATE TABLE t (items ARRAY(VARCHAR)) COMMENT 1 WITH (format = 'PARQUET')",
+            "CREATE TABLE t COMMENT 'one' COMMENT 'two' AS SELECT 1",
+            "CREATE TABLE t COMMENT 'one' WITH (format = 'ORC') WITH (x = 1) AS SELECT 1",
+            "CREATE TABLE t COMMENT 'one' WITH MAYBE DATA",
+            "CREATE TABLE t COMMENT 'one' AS",
             "CREATE TABLE t (LIKE source INCLUDING)",
             "CREATE OR REPLACE TABLE IF NOT EXISTS t AS SELECT 1",
             "ANALYZE t WITH (sample =)",
@@ -6525,6 +6743,8 @@ mod tests {
             "SELECT * FROM JSON_TABLE(col, '$' COLUMNS(name varchar FORMAT XML PATH '$'))",
             "SELECT JSON_VALUE(payload, '$.x' DEFAULT ON EMPTY)",
             "SELECT JSON_QUERY(payload, '$' WITH CONDITIONAL)",
+            "SELECT JSON_QUERY(payload, '$' KEEP QUOTES ON SCALAR)",
+            "SELECT JSON_QUERY(payload, '$' KEEP QUOTES OMIT QUOTES)",
             "SELECT JSON_OBJECT('k' VALUE)",
             "TABLE 1",
             "TABLE nation alias",

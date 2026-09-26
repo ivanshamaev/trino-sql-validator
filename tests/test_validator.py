@@ -528,7 +528,7 @@ def test_create_function_treats_dollar_body_as_opaque_language_text() -> None:
     sql = (
         "CREATE FUNCTION external_f(value bignum) RETURNS woop\n"
         "LANGUAGE python\n"
-        "AS $$return marh(value) and the word RETURN are opaque$$"
+        "AS $$\nreturn marh(value) and the word RETURN are opaque\n$$"
     )
     result = validate(sql)
 
@@ -601,6 +601,8 @@ def test_create_function_supports_all_compound_control_shapes() -> None:
         "CREATE FUNCTION f() RETURNS bigint RETURNS NULL INPUT RETURN 1",
         "CREATE FUNCTION f() RETURNS bigint AS 'return 1'",
         "CREATE FUNCTION f() RETURNS bigint AS $tag$return 1$tag$",
+        "CREATE FUNCTION f() RETURNS bigint LANGUAGE python AS $$return 1$$",
+        "WITH FUNCTION f() RETURNS bigint LANGUAGE python AS $$return 1$$ SELECT f()",
         "CREATE FUNCTION f() RETURNS bigint BEGIN RETURN 1 END",
         "CREATE FUNCTION f() RETURNS bigint BEGIN IF true RETURN 1; END IF; END",
         "CREATE FUNCTION f() RETURNS bigint BEGIN DECLARE x bigint RETURN x; END",
@@ -653,7 +655,7 @@ def test_inline_with_function_allows_a_following_cte_query() -> None:
 def test_inline_with_function_supports_opaque_dollar_body() -> None:
     sql = (
         "WITH FUNCTION external_f(value bignum) RETURNS woop "
-        "LANGUAGE python AS $$return marh(value)$$\n"
+        "LANGUAGE python AS $$\nreturn marh(value)\n$$\n"
         "SELECT external_f(1)"
     )
     result = validate(sql)
@@ -778,21 +780,54 @@ def test_group_by_quantifiers_require_grouping_elements(sql: str) -> None:
     assert result.warnings == ()
 
 
-def test_empty_grouping_elements_preserve_warning_positions() -> None:
-    result = validate("SELECT 1\nFROM t\nGROUP BY ALL ROLLUP (), marh(a)")
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 GROUP BY ROLLUP ()",
+        "SELECT 1 GROUP BY CUBE ()",
+        "SELECT 1 GROUP BY GROUPING SETS ()",
+        "SELECT rollup()",
+        "SELECT cube()",
+    ],
+)
+def test_empty_or_scalar_grouping_elements_are_rejected(sql: str) -> None:
+    result = validate(sql)
 
-    assert result.valid is True
-    assert result.unknown_functions == ["marh"]
-    assert [(warning.line, warning.column) for warning in result.warnings] == [(3, 25)]
+    assert result.valid is False
+    assert result.statement_count == 0
+    assert result.warnings == ()
 
 
-def test_empty_grouping_elements_do_not_rewrite_functions_or_grouping_sets() -> None:
-    function = validate("SELECT rollup()")
-    grouping_sets = validate("SELECT 1 GROUP BY GROUPING SETS ()")
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 GROUP BY ROLLUP (())",
+        "SELECT 1 GROUP BY CUBE (())",
+        'SELECT "rollup"()',
+    ],
+)
+def test_nonempty_or_quoted_grouping_neighbors_are_valid(sql: str) -> None:
+    assert validate(sql).valid is True
 
-    assert function.valid is True
-    assert function.unknown_functions == ["rollup"]
-    assert grouping_sets.valid is False
+
+@pytest.mark.parametrize(
+    ("sql", "marker"),
+    [
+        ("SELECT 1 GROUP BY ROLLUP ()", "ROLLUP"),
+        ("SELECT rollup()", "rollup"),
+        (
+            "CREATE FUNCTION f() RETURNS bigint LANGUAGE python AS $$return 1$$",
+            "$$",
+        ),
+    ],
+)
+def test_native_oracle_rejections_report_source_locations(sql: str, marker: str) -> None:
+    result = validate(sql)
+
+    assert result.valid is False
+    assert result.error is not None
+    assert result.error.line == 1
+    assert result.error.column == sql.index(marker) + 1
 
 
 def test_at_local_preserves_expression_warning_position() -> None:
@@ -1372,6 +1407,14 @@ def test_current_trino_statement_forms_validate(sql: str) -> None:
         "CREATE TABLE foo(x, y) AS SELECT a, b FROM source",
         "CREATE OR REPLACE TABLE foo(x) AS SELECT a FROM source WITH DATA",
         "CREATE TABLE IF NOT EXISTS foo(x) AS SELECT a FROM source WITH NO DATA",
+        "CREATE TABLE foo COMMENT 'copy' AS SELECT 1",
+        "CREATE TABLE foo WITH (format = 'PARQUET') AS SELECT 1 WITH DATA",
+        "CREATE TABLE foo COMMENT 'copy' WITH (format = 'PARQUET') AS SELECT 1 WITH NO DATA",
+        (
+            "CREATE TABLE foo COMMENT 'test' "
+            "WITH (string = 'bar', long = 42, computed = 'ban' || 'ana', "
+            "a = ARRAY['v1', 'v2']) AS SELECT * FROM source WITH NO DATA"
+        ),
         "ANALYZE foo WITH (sample = 10, columns = ARRAY['a', 'b'])",
         "CREATE VIEW report COMMENT 'report' SECURITY DEFINER AS SELECT * FROM source",
         "CREATE VIEW report SECURITY INVOKER WITH (owner = 'analytics') AS SELECT 1",
@@ -1395,6 +1438,11 @@ def test_trino_483_statement_extensions_validate(sql: str) -> None:
         "CREATE OR REPLACE TABLE IF NOT EXISTS foo AS SELECT 1",
         "CREATE TABLE foo(x,) AS SELECT 1",
         "CREATE TABLE foo(x) AS SELECT 1 WITH NO DATA trailing",
+        "CREATE TABLE foo COMMENT 'first' COMMENT 'second' AS SELECT 1",
+        "CREATE TABLE foo COMMENT 'copy' WITH (format = 'PARQUET') WITH (x = 1) AS SELECT 1",
+        "CREATE TABLE foo COMMENT 'copy' WITH MAYBE DATA",
+        "CREATE TABLE foo COMMENT 'copy'",
+        "CREATE TABLE foo COMMENT 'copy' AS",
         "ANALYZE foo WITH ()",
         "ANALYZE foo WITH (sample =)",
         "CREATE VIEW report COMMENT 1 AS SELECT 1",
@@ -1428,6 +1476,25 @@ def test_statement_extension_metadata_preserves_warning_locations() -> None:
         ("marh", 4, 33),
         ("marh", 5, 32),
         ("bignum", 5, 47),
+    ]
+
+
+def test_ctas_comment_and_properties_preserve_warning_locations() -> None:
+    sql = (
+        "CREATE TABLE report COMMENT 'copy'\n"
+        "WITH (computed = marh(CAST(1 AS bignum)))\n"
+        "AS SELECT zoop(2)\n"
+        "WITH NO DATA"
+    )
+
+    result = validate(sql)
+
+    assert result.valid is True, result.error
+    assert result.statement_count == 1
+    assert [(warning.name, warning.line, warning.column) for warning in result.warnings] == [
+        ("marh", 2, 18),
+        ("bignum", 2, 33),
+        ("zoop", 3, 11),
     ]
 
 

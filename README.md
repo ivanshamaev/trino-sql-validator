@@ -144,14 +144,19 @@ stricter Trino fidelity.
 
 Parser fidelity is checked reproducibly against direct-string cases extracted
 from Apache Trino's parser tests. With ordinary Java strings and text blocks,
-the pinned Trino 483 audit currently accepts 476/484 statements, 231/238
+the pinned Trino 483 audit currently accepts 481/484 statements, 231/238
 expressions, 68/68 types, the extracted Functions/Routines subset, and rejects
 23/23 direct negative statements. Known differences are pinned in a named
 allowlist; new mismatches or a reduced extracted denominator fail the audit.
-These figures and the 276 independently checked positive fixture statements
+These figures and the 553 independently checked positive fixture statements
 describe measured corpora, not complete Trino grammar or connector behavior.
 SQL embedded inside ordinary string literals, JSON paths, WKT, dynamic SQL, and
 unrendered macro output is intentionally opaque rather than recursively parsed.
+
+An optional offline differential audit compares the same fixtures and Trino 483
+corpus with pinned SQLGlot 30.19.0. SQLGlot is neither a runtime dependency nor
+an alternative validity backend; its full-AST, `Command` fallback, and error
+outcomes are tracked separately to identify candidates for native improvements.
 
 To keep invalid or adversarial input from exhausting the native parser stack,
 validation rejects a statement after 4,096 significant SQL tokens, nesting
@@ -173,6 +178,10 @@ cargo test               # Rust tests
 pytest -q                # Python tests
 cargo fmt --check        # formatting
 cargo clippy --all-targets -- -D warnings
+# optional differential parser audit
+pip install -e ".[sqlglot-audit]"
+python tools/audit_sqlglot.py --baseline \
+  plan/sqlglot_30_19_0_trino_483_audit_baseline.json --fail-on-regression
 python tools/extract_functions.py --ref 483 --check
 python tools/extract_types.py --ref 483 --check
 python tools/audit_upstream_parsers.py --baseline plan/trino_483_audit_baseline.json --fail-on-regression

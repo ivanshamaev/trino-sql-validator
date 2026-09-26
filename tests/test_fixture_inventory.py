@@ -22,6 +22,40 @@ class FixtureExpectation:
     case_count: int | None = None
 
 
+DATAMART_FEATURES = {
+    "account_balance_anomaly_detection.sql": ("window", "anomaly-detection"),
+    "ad_impressions_approx_metrics.sql": ("approximate-aggregates", "adtech"),
+    "array_lambda_transform_filter_reduce.sql": ("array", "lambda", "reduce"),
+    "attribution_first_last_touch.sql": ("window", "joins", "attribution"),
+    "campaign_ctr_spend_metrics.sql": ("aggregate", "joins", "adtech"),
+    "churn_reactivation_analysis.sql": ("window", "date-time", "churn"),
+    "cohort_ltv_analysis.sql": ("create-view", "window", "cohort"),
+    "conversion_funnel_stages.sql": ("window", "conditional", "funnel"),
+    "corrupted_imports_safe_casting.sql": ("try-cast", "try", "data-quality"),
+    "daily_sales_summary_partitioned.sql": ("ctas", "properties", "aggregate"),
+    "deduplicate_transactions_qualify.sql": ("cte", "window", "deduplication"),
+    "department_row_map_agg.sql": ("row", "map", "aggregate"),
+    "events_timezone_conversion.sql": ("time-zone", "extract"),
+    "http_payload_url_json_parse.sql": ("url", "json", "structural-types"),
+    "inventory_levels_upsert.sql": ("merge", "dml-branches"),
+    "invoice_overdue_payment_status.sql": ("window", "date-time", "conditional"),
+    "ip_network_zone_classification.sql": ("ipaddress", "cast", "conditional"),
+    "jdbc_catalog_metadata.sql": ("system-jdbc", "join", "ordering"),
+    "keyword_performance_cpa.sql": ("aggregate", "having", "date"),
+    "market_basket_product_pairs.sql": ("cte", "self-join", "subquery"),
+    "org_hierarchy_recursive.sql": ("recursive-cte", "union"),
+    "package_checkpoint_tracking.sql": ("unnest", "ordinality", "window"),
+    "revenue_mom_yoy_growth.sql": ("window", "date-time", "growth"),
+    "rfm_segmentation.sql": ("ctas", "window", "segmentation"),
+    "sales_price_history_variance.sql": ("window", "range-join"),
+    "top_products_category_ranking.sql": ("grouping-sets", "window", "ranking"),
+    "transactions_currency_conversion.sql": ("correlated-subquery", "join"),
+    "user_event_sequence_agg.sql": ("array", "ordered-aggregate", "sequence"),
+    "user_sessionization.sql": ("window", "sessionization"),
+    "vehicle_maintenance_downtime.sql": ("window", "date-time", "fleet"),
+}
+
+
 FIXTURE_EXPECTATIONS = {
     "datamart_example.sql": FixtureExpectation(True, 1),
     "ddl_multi.sql": FixtureExpectation(True, 3),
@@ -43,6 +77,10 @@ FIXTURE_EXPECTATIONS = {
     "trino_specific.sql": FixtureExpectation(True, 1),
     "trino_tpch_queries.sql": FixtureExpectation(True, 39),
     "valid_multi.sql": FixtureExpectation(True, 3),
+    **{
+        f"datamarts/{filename}": FixtureExpectation(True, 1)
+        for filename in DATAMART_FEATURES
+    },
 }
 
 FIXTURE_FEATURES = {
@@ -70,6 +108,10 @@ FIXTURE_FEATURES = {
     "trino_specific.sql": ("grouping", "having", "limit-all"),
     "trino_tpch_queries.sql": ("tpch", "join", "subquery", "ddl", "dml"),
     "valid_multi.sql": ("multi-statement", "select", "insert"),
+    **{
+        f"datamarts/{filename}": ("datamart", "native-trino-483", *features)
+        for filename, features in DATAMART_FEATURES.items()
+    },
 }
 
 
@@ -249,7 +291,7 @@ LOCATIONLESS_UPSTREAM_PARSER_CASES = {
 
 
 def test_every_sql_fixture_has_an_explicit_expectation() -> None:
-    actual = {path.name for path in FIXTURES.glob("*.sql")}
+    actual = {path.relative_to(FIXTURES).as_posix() for path in FIXTURES.rglob("*.sql")}
     assert actual == FIXTURE_EXPECTATIONS.keys()
 
 
@@ -295,7 +337,7 @@ def test_positive_fixture_splitter_preserves_expected_statement_counts() -> None
     for filename, expected in FIXTURE_EXPECTATIONS.items():
         if expected.valid:
             assert actual.get(filename, 0) == expected.statement_count
-    assert len(POSITIVE_FIXTURE_STATEMENTS) == 523
+    assert len(POSITIVE_FIXTURE_STATEMENTS) == 553
 
 
 @pytest.mark.parametrize(
@@ -346,7 +388,9 @@ def test_fixture_splitter_handles_comments_dollar_bodies_and_routine_semicolons(
         BEGIN
             RETURN x + 1;
         END;
-        CREATE FUNCTION g() RETURNS VARCHAR LANGUAGE PYTHON AS $$return ';'$$;
+        CREATE FUNCTION g() RETURNS VARCHAR LANGUAGE PYTHON AS $$
+return ';'
+$$;
         -- trailing ; comment
         SELECT 2
     """

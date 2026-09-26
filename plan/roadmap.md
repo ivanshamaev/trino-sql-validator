@@ -133,12 +133,31 @@ Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
   compatibility includes `{,}` row-pattern quantifiers, `GROUP BY AUTO`, and
   contextual `OVER` aliases; Generic and Hive behavior remains unchanged.
 
+## v0.19.0 — differential parser audit and native fidelity
+
+- Added a pinned SQLGlot 30.19.0 offline audit across stable fixtures and the
+  Trino 483 parser corpus. `Command` fallback remains distinct from a full AST;
+  SQLGlot is not a production dependency or validity backend.
+- Closed both positive gaps confirmed by SQLGlot and native Trino: CTAS with
+  ordered `COMMENT`/properties/`AS`/`WITH [NO] DATA`, and column defaults
+  followed by `NOT NULL`. Pinned statement coverage is now 481/484.
+- Ran the complete current-valid project corpus through the native Trino 483
+  parser and closed three false-accept families around external routine body
+  newlines and `ROLLUP`/`CUBE`, while retaining documented BOM and
+  Trino-master forward compatibility.
+- Ported missing syntax families from SQLGlot's Trino tests after independent
+  Trino 483 verification, including JSON query quote clauses and contextual
+  SQL-routine labels; SQLGlot remains absent from production validation.
+- Added 30 single-statement data-mart fixtures to the recursive fixture
+  inventory after native Trino 483 verification; the positive corpus is now
+  553 statements.
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.
-- Work through the named Trino 483 text-block mismatches now exposed by the
-  expanded audit (CTAS option ordering, advanced SQL/JSON and row-pattern windows,
-  and table-function edge cases) without loosening the Trino dialect.
+- Work through the remaining named Trino 483 text-block mismatches (advanced
+  SQL/JSON, row-pattern windows, and table-function edge cases) without
+  loosening the Trino dialect.
 
 ## Later ideation
 - **Trino-exact grammar:** bundle/port Trino's own `trino-parser` (ANTLR4) grammar
