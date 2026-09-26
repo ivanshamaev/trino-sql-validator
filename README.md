@@ -193,3 +193,38 @@ MIT
 
 [PyO3]: https://pyo3.rs
 [maturin]: https://maturin.rs
+
+## Comparison with SQLGlot
+
+`trino-sql-validator` and [SQLGlot](https://github.com/tobymao/sqlglot) solve
+different problems. This library focuses on strict, fast validation of Trino
+syntax and returns a small validation result with Trino-specific catalog
+warnings. SQLGlot provides a rich AST and is a better fit for formatting,
+rewriting, lineage, and translation between SQL dialects, but its parser is
+deliberately permissive and is not a strict Trino validity oracle.
+
+The reproducible audit below compares `trino-sql-validator 0.19.0` with
+SQLGlot 30.19.0 against project fixtures and parser cases extracted from Trino
+483. “SQLGlot accepted” includes its `Command` fallback, which preserves an
+unsupported statement as text without fully parsing it. “Full AST” excludes
+that fallback.
+
+| Audit set or capability | `trino-sql-validator` | SQLGlot |
+| --- | --- | --- |
+| 553 valid project fixture statements | 553 accepted | 544 accepted; 441 produced a full AST |
+| 236 invalid project fixture statements | 236 rejected | 132 produced an error; 22 became `Command`; 82 produced an AST and were accepted |
+| 484 valid Trino 483 statements | 481 accepted | 454 accepted; 255 produced a full AST |
+| 238 valid Trino 483 expressions | 231 accepted | 221 accepted |
+| 68 valid Trino 483 types | 68 accepted | 48 accepted |
+| 23 directly invalid Trino 483 statements | 23 rejected | 5 produced a parse/token error; the other 18 became `Command` |
+| Primary use | Trino syntax validation, source locations, statement metadata, function/type warnings | Multi-dialect AST, transformation, generation, optimization, and lineage |
+| Runtime | Rust native extension with parser resource limits | Python, with an optional compiled distribution |
+| Invalid-input API | Returns `ValidationResult`; invalid SQL does not raise | Normally reports `ParseError`/`TokenError`, depending on the selected error level |
+| Jinja/dbt input | Length-preserving masking is built in | No equivalent contract in the audited parse path |
+
+The measured corpora are regression benchmarks, not proof of complete Trino
+grammar coverage. SQLGlot remains an optional offline audit dependency and is
+not used by `validate()` at runtime. Confirmed SQLGlot findings are checked
+against the native Trino parser before being implemented in the Rust parser.
+See the [full SQLGlot audit](plan/v0.19.0_sqlglot_parser.md) for methodology,
+known mismatches, and detailed results.
