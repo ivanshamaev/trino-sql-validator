@@ -83,7 +83,7 @@ INVALID_DATAMART_WARNINGS = {
     "mart_iot_telemetry_anomaly_detection.sql": ("to_timestamp_tz",),
     "mart_loan_portfolio_impairment.sql": ("last_day", "add_months"),
     "mart_network_cell_tower_load.sql": ("string_agg",),
-    "mart_order_fulfillment_sla.sql": ("percentile_cont", "decode"),
+    "mart_order_fulfillment_sla.sql": (),
     "mart_ott_user_content_recommendations.sql": ("wm_concat",),
     "mart_product_conversion_funnel.sql": ("isnull",),
     "mart_seo_keyword_rankings_daily.sql": ("ifnull",),
@@ -135,6 +135,12 @@ FIXTURE_EXPECTATIONS = {
         )
         for filename, warning_names in INVALID_DATAMART_WARNINGS.items()
     },
+    "invalid_datamarts/mart_order_fulfillment_sla.sql": FixtureExpectation(
+        False,
+        0,
+        error_fragment="WITHIN GROUP",
+        diagnostic_fixture=True,
+    ),
 }
 
 FIXTURE_FEATURES = {
@@ -404,7 +410,7 @@ def test_invalid_datamart_fixture_emits_a_diagnostic(
 
     assert result.error is not None or result.warnings
     assert tuple(warning.name for warning in result.warnings) == warning_names
-    assert result.statement_count == 1
+    assert result.statement_count == int(result.valid)
 
 
 def test_positive_fixture_splitter_preserves_expected_statement_counts() -> None:

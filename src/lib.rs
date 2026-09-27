@@ -1,5 +1,7 @@
 use core::ops::ControlFlow;
+#[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use sqlparser::ast::{visit_expressions, FunctionArgumentClause, FunctionArguments};
 use sqlparser::ast::{ArrayElemTypeDef, DataType, Expr, Ident, ObjectNamePart, Statement};
@@ -7,6 +9,7 @@ use sqlparser::ast::{JsonTableColumn, Query, Select, SelectItem, TableAlias, Tab
 use sqlparser::ast::{Visit, Visitor};
 use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(any(feature = "python", test))]
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -18,12 +21,13 @@ pub mod dialects;
 pub mod functions;
 pub mod types;
 
+#[cfg(feature = "python")]
 const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `(valid, statement_count, error_message, error_line, error_column,
 /// warnings)` where each warning is `(kind, name, line, column)` and `kind`
 /// is `"function"`, `"type"`, or `"alias"`.
-type ValidationResultTuple = (
+pub type ValidationResultTuple = (
     bool,
     usize,
     Option<String>,
@@ -32,9 +36,9 @@ type ValidationResultTuple = (
     Vec<(String, String, Option<usize>, Option<usize>)>,
 );
 
-type StatementInfoTuple = (usize, usize, usize, usize, usize, String, Option<String>);
+pub type StatementInfoTuple = (usize, usize, usize, usize, usize, String, Option<String>);
 
-type StatementAnalysisTuple = (
+pub type StatementAnalysisTuple = (
     ValidationResultTuple,
     Vec<StatementInfoTuple>,
     Option<usize>,
@@ -246,6 +250,10 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
             Vec::new(),
         )
     })
+}
+
+pub fn validate_sql_unchecked(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
+    validate_sql_inner(sql, dialect)
 }
 
 /// Walk every expression in the parsed statements and collect function calls
@@ -801,10 +809,11 @@ fn error_statement_index(
 ///
 /// Invalid SQL is reported as a tuple value — this function never raises for
 /// bad syntax. Only real programming errors (e.g. unknown dialect) raise.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (sql, dialect = "trino"))]
 fn validate(sql: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
-    let parsed_dialect = SqlDialect::from_str(dialect)?;
+    let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
     Ok(validate_sql_impl(sql, &parsed_dialect))
 }
 
@@ -812,10 +821,11 @@ fn validate(sql: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
 ///
 /// Returns the same tuple shape as [`validate`]. File-level errors (missing file,
 /// decode failure) raise an exception.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, dialect = "trino"))]
 fn validate_file(path: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
-    let parsed_dialect = SqlDialect::from_str(dialect)?;
+    let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
     let contents = std::fs::read_to_string(path).map_err(|err| {
         PyValueError::new_err(format!("failed to read SQL file '{}': {}", path, err))
     })?;
@@ -823,16 +833,22 @@ fn validate_file(path: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
 }
 
 /// Validate SQL and return opt-in source metadata for each statement.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (sql, dialect = "trino"))]
 fn analyze_statements(sql: &str, dialect: &str) -> PyResult<StatementAnalysisTuple> {
-    let parsed_dialect = SqlDialect::from_str(dialect)?;
-    let validation = validate_sql_impl(sql, &parsed_dialect);
-    let statements = statement_info(sql, &parsed_dialect);
-    let error_index = error_statement_index(&validation, &statements);
-    Ok((validation, statements, error_index))
+    let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
+    Ok(analyze_sql_impl(sql, &parsed_dialect))
 }
 
+pub fn analyze_sql_impl(sql: &str, dialect: &SqlDialect) -> StatementAnalysisTuple {
+    let validation = validate_sql_impl(sql, dialect);
+    let statements = statement_info(sql, dialect);
+    let error_index = error_statement_index(&validation, &statements);
+    (validation, statements, error_index)
+}
+
+#[cfg(feature = "python")]
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", PACKAGE_VERSION)?;
@@ -849,6 +865,64 @@ mod tests {
 
     fn trino() -> SqlDialect {
         SqlDialect::Trino
+    }
+
+    #[test]
+    fn v020_rejects_non_listagg_within_group() {
+        let result = validate_sql_impl("SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t", &trino());
+
+        assert!(!result.0);
+        assert_eq!((result.3, result.4), (Some(1), Some(15)));
+        assert!(result.5.is_empty());
+    }
+
+    #[test]
+    fn v020_accepts_extended_json_and_pattern_syntax() {
+        for sql in [
+            "SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+            "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (x INTEGER) PLAN (root))",
+            "SELECT sum(x) OVER (ROWS CURRENT ROW INITIAL PATTERN (A) DEFINE A AS true) FROM t",
+            "SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+        ] {
+            assert!(validate_sql_impl(sql, &trino()).0, "{sql}");
+        }
+    }
+
+    #[test]
+    fn v020_preserves_warnings_in_compatibility_metadata() {
+        let result = validate_sql_impl(
+            "SELECT last_z OVER (MEASURES missing_measure(z) AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS missing_define(z)) FROM t",
+            &trino(),
+        );
+
+        assert!(result.0);
+        assert_eq!(
+            result
+                .5
+                .iter()
+                .map(|warning| warning.1.as_str())
+                .collect::<Vec<_>>(),
+            ["missing_measure", "missing_define"]
+        );
+    }
+
+    #[test]
+    fn v020_expression_compatibility_keeps_trino_boundaries() {
+        for sql in [
+            "SELECT CASE x WHEN BETWEEN 1 AND 3 THEN 1 ELSE 0 END FROM t",
+            "SELECT ROW(1, 2) MATCH UNIQUE FULL (SELECT a, b FROM t)",
+            "SELECT UNIQUE (VALUES 1, 2)",
+            "SELECT ARRAY[1, 2][*]",
+        ] {
+            assert!(validate_sql_impl(sql, &trino()).0, "{sql}");
+        }
+        for sql in [
+            "SELECT CASE x WHEN BETWEEN 1 THEN 2 END FROM t",
+            "SELECT ROW(1) MATCH UNIQUE FULL ()",
+            "SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+        ] {
+            assert!(!validate_sql_impl(sql, &trino()).0, "{sql}");
+        }
     }
 
     #[test]

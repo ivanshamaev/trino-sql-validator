@@ -10,6 +10,15 @@
     "types": "281952cc97f531b69e44ab06673b3ebda4908a049d0e934786b34e65b411b998"
   },
   "cases": {
+    "fixture_diagnostic_datamarts": {
+      "minimum_total": 30,
+      "corpus_sha256": "aedf8100ecc14cc0957975bd1f51a660609b8dcbad8ae89b006eec2e52ae6cfd",
+      "outcome_sha256": "cbed56c2ec4031d912cca6adf42a213fc3529448469078344a5bd4516a4943ef",
+      "state_counts": {
+        "parse_error": 1,
+        "parsed_ast": 29
+      }
+    },
     "fixture_negative": {
       "minimum_total": 236,
       "corpus_sha256": "65c1070c1bf10454b04c2d95615ff3cbf47aced1a887d5b3fc10af8d6177d1ce",

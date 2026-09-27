@@ -144,10 +144,11 @@ stricter Trino fidelity.
 
 Parser fidelity is checked reproducibly against direct-string cases extracted
 from Apache Trino's parser tests. With ordinary Java strings and text blocks,
-the pinned Trino 483 audit currently accepts 481/484 statements, 231/238
+the pinned Trino 483 audit currently accepts 484/484 statements, 238/238
 expressions, 68/68 types, the extracted Functions/Routines subset, and rejects
-23/23 direct negative statements. Known differences are pinned in a named
-allowlist; new mismatches or a reduced extracted denominator fail the audit.
+23/23 direct negative statements. The remaining error-suite differences are
+documented semantic or wrapper-boundary exceptions. Exact source and corpus
+hashes make changed, missing, or stale baseline cases fail the audit.
 These figures and the 553 independently checked positive fixture statements
 describe measured corpora, not complete Trino grammar or connector behavior.
 SQL embedded inside ordinary string literals, JSON paths, WKT, dynamic SQL, and
@@ -157,6 +158,16 @@ An optional offline differential audit compares the same fixtures and Trino 483
 corpus with pinned SQLGlot 30.19.0. SQLGlot is neither a runtime dependency nor
 an alternative validity backend; its full-AST, `Command` fallback, and error
 outcomes are tracked separately to identify candidates for native improvements.
+
+The native Trino `SqlParser` oracle and grammar inventory are development tools,
+not parser backends. Importing or using the package never starts Java, Maven,
+SQLGlot, Docker, or a subprocess. The reproducible oracle uses JDK 25 and records
+the input, preparation, Java runtime, harness, class, and dependency-JAR hashes
+for every run. Its current corpus contains 1,040 independently labelled inputs.
+The grammar inventory fingerprints Trino's grammar, `SqlParser`, embedded
+`PostProcessor`, and `AstBuilder`; it records all 144 parser rules and 708
+top-level alternatives without claiming complete branch coverage. The same Rust
+core can also be compiled as an `rlib` without PyO3 for unit and fuzz testing.
 
 To keep invalid or adversarial input from exhausting the native parser stack,
 validation rejects a statement after 4,096 significant SQL tokens, nesting
@@ -168,7 +179,9 @@ error. Semicolon-separated statements have independent per-statement budgets.
 ## Development
 
 See [`AGENTS.md`](AGENTS.md) for setup, internal conventions, and release steps.
-The current automated suite contains 4,748 pytest cases and 82 Rust unit tests.
+The current automated suite contains 4,994 pytest cases and 86 Rust unit tests.
+It includes a 28-case LF/CRLF transformation matrix, six native-labelled token
+deletion mutations, and 18 committed seeds for three bounded fuzz targets.
 Key commands:
 
 ```bash
@@ -204,7 +217,7 @@ warnings. SQLGlot provides a rich AST and is a better fit for formatting,
 rewriting, lineage, and translation between SQL dialects, but its parser is
 deliberately permissive and is not a strict Trino validity oracle.
 
-The reproducible audit below compares `trino-sql-validator 0.19.0` with
+The reproducible audit below compares `trino-sql-validator 0.20.0` with
 SQLGlot 30.19.0 against project fixtures and parser cases extracted from Trino
 483. “SQLGlot accepted” includes its `Command` fallback, which preserves an
 unsupported statement as text without fully parsing it. “Full AST” excludes
@@ -214,8 +227,8 @@ that fallback.
 | --- | --- | --- |
 | 553 valid project fixture statements | 553 accepted | 544 accepted; 441 produced a full AST |
 | 236 invalid project fixture statements | 236 rejected | 132 produced an error; 22 became `Command`; 82 produced an AST and were accepted |
-| 484 valid Trino 483 statements | 481 accepted | 454 accepted; 255 produced a full AST |
-| 238 valid Trino 483 expressions | 231 accepted | 221 accepted |
+| 484 valid Trino 483 statements | 484 accepted | 454 accepted; 255 produced a full AST |
+| 238 valid Trino 483 expressions | 238 accepted | 221 accepted |
 | 68 valid Trino 483 types | 68 accepted | 48 accepted |
 | 23 directly invalid Trino 483 statements | 23 rejected | 5 produced a parse/token error; the other 18 became `Command` |
 | Primary use | Trino syntax validation, source locations, statement metadata, function/type warnings | Multi-dialect AST, transformation, generation, optimization, and lineage |

@@ -1,0 +1,1 @@
+SELECT JSON_VALUE(missing_json(1) FORMAT JSON ENCODING UTF8, '$' RETURNING missing_type)

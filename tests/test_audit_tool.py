@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import sys
 from importlib import import_module
@@ -120,3 +121,68 @@ def test_baseline_gate_detects_new_mismatch_and_missing_cases() -> None:
 
     assert any("expected at least 2" in regression for regression in regressions)
     assert any("new mismatch" in regression for regression in regressions)
+
+
+def test_baseline_gate_detects_stale_allowlist_and_changed_corpus() -> None:
+    report = {
+        "trino": {
+            "source": {
+                "repository": "trinodb/trino",
+                "revision": "abc",
+                "content_sha256": {"parser": "new-source"},
+            },
+            "positive_statements": {
+                "total": 1,
+                "corpus_sha256": "new-corpus",
+                "mismatches": [],
+            },
+            "extraction": {},
+        }
+    }
+    baseline = {
+        "repository": "trinodb/trino",
+        "revision": "abc",
+        "source_content_sha256": {"parser": "old-source"},
+        "cases": {
+            "positive_statements": {
+                "total": 1,
+                "corpus_sha256": "old-corpus",
+                "allowed_mismatches": ["positive_statements:obsolete"],
+            }
+        },
+    }
+
+    regressions = audit.baseline_regressions(report, baseline)
+
+    assert "baseline source hashes do not match the audited Trino sources" in regressions
+    assert "positive_statements: audited corpus identity changed" in regressions
+    assert "stale allowed mismatch: positive_statements:obsolete" in regressions
+
+
+def test_probe_identity_changes_with_entry_point_and_wrapper() -> None:
+    first = audit.Example("testCase", "1", entry_point="expression")
+    changed_entry = audit.Example("testCase", "1", entry_point="createExpression")
+
+    plain = audit.probe([first], True, lambda sql: f"SELECT {sql}")
+    changed = audit.probe([changed_entry], True, lambda sql: f"SELECT {sql}")
+    changed_wrapper = audit.probe([first], True, lambda sql: f"VALUES ({sql})")
+
+    assert plain["corpus_sha256"] != changed["corpus_sha256"]
+    assert plain["corpus_sha256"] != changed_wrapper["corpus_sha256"]
+
+
+def test_committed_allowed_mismatches_all_have_review_details() -> None:
+    baseline = json.loads(
+        (ROOT / "plan/trino_483_audit_baseline.json").read_text(encoding="utf-8")
+    )
+    allowed = {
+        item
+        for section in baseline["cases"].values()
+        for item in section["allowed_mismatches"]
+    }
+
+    assert set(baseline["allowed_mismatch_details"]) == allowed
+    assert all(
+        {"reason", "work_item", "control_sql"} <= details.keys()
+        for details in baseline["allowed_mismatch_details"].values()
+    )

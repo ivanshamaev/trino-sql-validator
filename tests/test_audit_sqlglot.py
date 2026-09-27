@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from audit_sqlglot import (
     SQLGLOT_VERSION,
+    _fixture_sections,
     baseline_regressions,
     build_baseline,
     classify_sql,
@@ -85,3 +86,14 @@ def test_sqlglot_outcomes_distinguish_ast_command_and_errors() -> None:
     nested = sqlglot.parse_one("SELECT 1")
     nested.set("where", exp.Where(this=exp.Command(this="SHOW CATALOGS")))
     assert contains_command([nested]) is True
+
+
+def test_diagnostic_datamarts_have_their_own_sqlglot_section() -> None:
+    pytest.importorskip("sqlglot")
+
+    section = _fixture_sections()["fixture_diagnostic_datamarts"]
+
+    assert section["total"] == 30
+    assert section["state_counts"] == {"parse_error": 1, "parsed_ast": 29}
+    assert sum(case["expected_valid"] for case in section["cases"]) == 29
+    assert all("warning_names" in case["provenance"] for case in section["cases"])

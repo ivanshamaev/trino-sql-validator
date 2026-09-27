@@ -5,14 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.20.0] - 2026-09-27
 
 ### Added
 
-- Added 30 single-statement invalid data-mart fixtures with exact catalog-warning
-  expectations. The current suite contains 4,748 pytest cases and 82 Rust unit
-  tests; the diagnostic fixtures remain separate from the 553-statement positive
-  parser corpus.
+- Added a 100-case offline Trino 483 grammar corpus with exact validity,
+  warnings, and error anchors, plus an independently verified 84-cell
+  family/polarity/wrapper matrix.
+- Added an honest Trino 483 inventory of 144 parser rules and 708 top-level
+  alternatives, with separate fingerprints for the grammar, `SqlParser`,
+  `PostProcessor`, and `AstBuilder`, exact source/corpus identity gates, and
+  coverage for direct `createExpression` and row-pattern entry points.
+- Added a dev-only JDK 25 Trino parser oracle with protocol schema 2 and a
+  1,040-case project corpus exporter. Reports preserve raw/prepared input hashes,
+  preparation metadata, entry points, parser error classes and locations, Java
+  runtime identity, harness/class hashes, and every dependency-JAR hash. Java is
+  not a runtime or package-build dependency.
+- Added a no-Python Rust-core build and three `cargo-fuzz` targets for validation,
+  statement analysis, and warning extraction, with 18 committed seeds, a 28-cell
+  LF/CRLF transformation matrix, and six native-labelled deletion mutations.
+- Added 30 single-statement invalid data-mart fixtures with exact diagnostics;
+  29 remain parser-valid with warnings and one is now a parser error.
+
+### Fixed
+
+- Enforced Trino's LISTAGG-only `WITHIN GROUP` grammar and preserved valid
+  LISTAGG overflow/filter/window forms.
+- Added table-function descriptors and copartition forms, SQL/JSON encodings,
+  JSON_TABLE plans, pattern-recognition windows and relation patterns, partial
+  CASE predicates, MATCH/UNIQUE predicates, and array wildcard subscripts.
+- Preserved nested function/type warnings and original source coordinates across
+  all new compatibility paths. The pinned positive audit is now 484/484
+  statements, 238/238 expressions, and 68/68 types.
+
+### Verification
+
+- The current suite contains 4,994 pytest cases and 86 Rust unit tests; the
+  553-statement positive fixture corpus and 236 independent negatives are
+  unchanged.
+- Local bounded fuzz smoke completed without crash or timeout: 26,626 validation,
+  23,395 analysis, and 21,328 warning-extraction iterations. The scheduled job
+  repeats all targets with 60-second, 64-KiB input, 1-GiB RSS, and 10-second
+  per-input timeout limits and uploads corpora/findings.
+- `validate_batch()`/GIL work (V020-08) and performance profiling (V020-09)
+  remain explicitly deferred and are not part of the v0.20.0 contract.
 
 ## [0.19.0] - 2026-09-26
 

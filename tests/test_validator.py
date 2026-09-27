@@ -220,6 +220,14 @@ def test_validate_file_missing_raises() -> None:
         validate_file(FIXTURES / "does_not_exist.sql")
 
 
+def test_validate_file_invalid_utf8_raises(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-utf8.sql"
+    path.write_bytes(b"SELECT '\xff'")
+
+    with pytest.raises(ValueError, match="failed to read SQL file"):
+        validate_file(path)
+
+
 def test_unknown_dialect_raises() -> None:
     with pytest.raises(ValueError):
         validate("SELECT 1", dialect="mysql")

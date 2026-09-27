@@ -1,6 +1,3 @@
-use pyo3::exceptions::PyValueError;
-use pyo3::PyErr;
-
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect};
 
 pub mod trino_statements;
@@ -24,17 +21,17 @@ pub enum SqlDialect {
 }
 
 impl std::str::FromStr for SqlDialect {
-    type Err = PyErr;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "trino" => Ok(SqlDialect::Trino),
             "hive" => Ok(SqlDialect::Hive),
             "generic" => Ok(SqlDialect::Generic),
-            other => Err(PyValueError::new_err(format!(
+            other => Err(format!(
                 "unknown dialect '{}'; expected one of: trino, hive, generic",
                 other
-            ))),
+            )),
         }
     }
 }

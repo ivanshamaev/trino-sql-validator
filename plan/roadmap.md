@@ -152,18 +152,32 @@ Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
   inventory after native Trino 483 verification; the positive corpus is now
   553 statements.
 
+## v0.20.0 — grammar-driven Trino fidelity
+
+- Closed the pinned Trino 483 positive audit at 484/484 statements and 238/238
+  expressions while preserving 68/68 types and all direct parser negatives.
+- Added an offline 100-case grammar corpus and native-verified 84-cell wrapper
+  matrix for seven previously incomplete syntax families.
+- Added exact error anchors, warning preservation through compatibility
+  metadata, and an inventory of 144 grammar rules and 708 top-level alternatives
+  with separate grammar/lexer-postprocessing/AST-builder provenance.
+- Added a protocol-v2, 1,040-case dev-only Trino parser oracle with full
+  input/toolchain provenance, a no-Python Rust-core build, a 28-case newline
+  transformation matrix, six native-labelled mutations, and three bounded fuzz
+  targets with 18 committed seeds. Runtime and package builds remain free of
+  Java and subprocess parser dependencies.
+- Verified 4,994 pytest cases, 86 Rust unit tests, and local libFuzzer smoke for
+  all three targets. Batch/GIL changes and performance profiling remain deferred.
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.
-- Work through the remaining named Trino 483 text-block mismatches (advanced
-  SQL/JSON, row-pattern windows, and table-function edge cases) without
-  loosening the Trino dialect.
+- Expand rules marked `missing` in the grammar inventory using independently
+  verified neighbors rather than claiming complete grammar coverage.
 
 ## Later ideation
-- **Trino-exact grammar:** bundle/port Trino's own `trino-parser` (ANTLR4) grammar
-  via `antlr4rust`/`antlr4_rust` crate, or vendor Trino's grammar files. Gives exact
-  syntax, at the cost of maintaining a grammar fork. Trigger if sqlparser-rs gaps
-  become a blocker.
+- **Additional Rust grammar work:** continue targeted dialect hooks and checked
+  compatibility representations; keep ANTLR/JVM generation out of production.
 - **Semantic lint config:** allow relying on a live Trino server (JDBC/presto-client)
   for full semantic validation behind a flag.
 - **CLI:** `trino-sql-validate path/to/file.sql` using `[project.scripts]`.

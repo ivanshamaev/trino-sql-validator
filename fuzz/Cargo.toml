@@ -1,0 +1,33 @@
+[package]
+name = "trino-sql-validator-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.trino-sql-validator]
+path = ".."
+default-features = false
+
+[[bin]]
+name = "validation"
+path = "fuzz_targets/validation.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "analysis"
+path = "fuzz_targets/analysis.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "warnings"
+path = "fuzz_targets/warnings.rs"
+test = false
+doc = false

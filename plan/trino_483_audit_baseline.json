@@ -1,54 +1,94 @@
 {
   "repository": "trinodb/trino",
   "revision": "50b0b50b75abd47f830b7805ee1b51716eb4065e",
+  "source_content_sha256": {
+    "errors": "812558fb3a95ef6df51dad817ad753369e48f33297ede728e94c2aaae58eb9bc",
+    "functions": "2e10d20b3497ada270d11ef4d075b74755900ab3c4c13c0a31bc604c205b3f8e",
+    "parser": "61dda72023590a68b0c987bec0818fb6de1f8a5074c5a42adc41f5b833f1cece",
+    "routines": "9156e85ece8a1e91225211092c3ac020cea86bbde82b30e7b816d96439eba8fe",
+    "types": "281952cc97f531b69e44ab06673b3ebda4908a049d0e934786b34e65b411b998"
+  },
+  "allowed_mismatch_details": {
+    "negative_statements_error_suite:45f93644d4bb84d4": {
+      "reason": "GROUPING argument validity requires semantic grouping analysis beyond syntax parsing.",
+      "work_item": "documented-semantic-boundary",
+      "control_sql": "SELECT grouping(a) FROM (VALUES (1)) AS t (a) GROUP BY a"
+    },
+    "negative_statements_error_suite:5fe0fcee418e8293": {
+      "reason": "Integer overflow for a target type is a value/type semantic check, not grammar.",
+      "work_item": "documented-semantic-boundary",
+      "control_sql": "SELECT CAST(-1 AS BIGINT)"
+    },
+    "negative_statements_error_suite:aae745a3ffaf6b7a": {
+      "reason": "Integer overflow for a target type is a value/type semantic check, not grammar.",
+      "work_item": "documented-semantic-boundary",
+      "control_sql": "SELECT CAST(1 AS BIGINT)"
+    },
+    "negative_expressions_error_suite:f8bf4e3161e6b592": {
+      "reason": "The statement wrapper turns the raw-expression trailing identifier into a legal projection alias.",
+      "work_item": "entry-point-wrapper-artifact",
+      "control_sql": "SELECT 1 + 1 AS x"
+    }
+  },
   "cases": {
     "positive_statements": {
-      "minimum_total": 484,
-      "allowed_mismatches": [
-        "positive_statements:1f69438035266f98",
-        "positive_statements:20698d45d8332844",
-        "positive_statements:56d48ad1cdf8e07d",
-        "positive_statements:7eea2c574cd2771f",
-        "positive_statements:9d5cbd44b3173ec4",
-        "positive_statements:b72e07f98723c611",
-        "positive_statements:edf83b00c14abc79",
-        "positive_statements:fd6718febae203b1"
-      ]
+      "total": 484,
+      "corpus_sha256": "7860196dcb3815cae6bfd962b1cee3cd7877ed0ba7434a44c67146cb7fddc15e",
+      "allowed_mismatches": []
     },
     "positive_expressions": {
-      "minimum_total": 238,
-      "allowed_mismatches": [
-        "positive_expressions:363d97b00d09908c",
-        "positive_expressions:3833bcf0d128cc2f",
-        "positive_expressions:3b1cf222d77f22f5",
-        "positive_expressions:577d1930fc931612",
-        "positive_expressions:58cdf78c04accf8b",
-        "positive_expressions:c4701632187df77c",
-        "positive_expressions:d699d9ede2c2b482"
-      ]
+      "total": 238,
+      "corpus_sha256": "6669b78b254c837f3c4e8729843d1dcc15a113382f45a2955f47891e450287ab",
+      "allowed_mismatches": []
+    },
+    "positive_created_statements": {
+      "total": 0,
+      "corpus_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "allowed_mismatches": []
+    },
+    "positive_created_expressions": {
+      "total": 15,
+      "corpus_sha256": "b64682e4b4d0d91d2d8304ca37325373b2a8ba0683629ac1d800456292dd50d2",
+      "allowed_mismatches": []
+    },
+    "positive_row_patterns": {
+      "total": 9,
+      "corpus_sha256": "01b79a1d932a020f9c24c0a36b1ad5f62aa025fb7e93f6990776766d9241401b",
+      "allowed_mismatches": []
+    },
+    "positive_path_specifications": {
+      "total": 0,
+      "corpus_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "allowed_mismatches": []
     },
     "positive_types": {
-      "minimum_total": 68,
+      "total": 68,
+      "corpus_sha256": "fe9329a4d88200249f9b4f9a8312e4a76be08b55cb8d0d08abf0411cb3f28ec6",
       "allowed_mismatches": []
     },
     "positive_function_statements": {
-      "minimum_total": 1,
+      "total": 1,
+      "corpus_sha256": "b12ccf91da5cea62a33c6ff0a8a0237fe197bad837ea35adb90f1412c88e3a31",
       "allowed_mismatches": []
     },
     "positive_routine_statements": {
-      "minimum_total": 5,
+      "total": 5,
+      "corpus_sha256": "4c272499ee9ec54a502ce056b5ee1e0414ed90e43faf955193a1733b852a9330",
       "allowed_mismatches": []
     },
     "positive_function_specifications": {
-      "minimum_total": 1,
+      "total": 1,
+      "corpus_sha256": "0790780fd41a10d3b168de63aaa713b5724fd700ec7447c7a4d4d1c42b8f164e",
       "allowed_mismatches": []
     },
     "negative_statements_direct": {
-      "minimum_total": 23,
+      "total": 23,
+      "corpus_sha256": "b9099f8e41008b33528d67e1f9ad7189944cecf209c242428048a66dc2a6f475",
       "allowed_mismatches": []
     },
     "negative_statements_error_suite": {
-      "minimum_total": 55,
+      "total": 55,
+      "corpus_sha256": "bb3cd7240e6429b299080ec78289132603300adecc3a190d2a5f9d3bcbd80704",
       "allowed_mismatches": [
         "negative_statements_error_suite:45f93644d4bb84d4",
         "negative_statements_error_suite:5fe0fcee418e8293",
@@ -56,7 +96,8 @@
       ]
     },
     "negative_expressions_error_suite": {
-      "minimum_total": 1,
+      "total": 1,
+      "corpus_sha256": "0be0b5a46208613d652928a9f32055328d0edfab470406df2910835842723d54",
       "allowed_mismatches": [
         "negative_expressions_error_suite:f8bf4e3161e6b592"
       ]

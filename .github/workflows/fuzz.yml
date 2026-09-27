@@ -1,0 +1,39 @@
+name: Rust fuzz smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [validation, analysis, warnings]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-01
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzz ${{ matrix.target }}
+        run: >-
+          cargo +nightly-2026-09-01 fuzz run ${{ matrix.target }}
+          -- -max_total_time=60 -max_len=65536 -rss_limit_mb=1024 -timeout=10
+      - name: Upload corpus and findings
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            fuzz/corpus/${{ matrix.target }}
+            fuzz/artifacts/${{ matrix.target }}

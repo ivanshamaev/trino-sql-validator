@@ -1,0 +1,3637 @@
+{
+  "schema_version": 2,
+  "purpose": "Independent single-statement regression cases selected from Trino 483 grammar gaps and executed by pytest without Java.",
+  "audited_on": "2026-09-26",
+  "baseline_project_v019": {
+    "version": "0.19.0",
+    "commit": "22f5d90",
+    "native_sha256": "754f698ee4449fa47cd9974e3ad16dc6492490054086fc73174665443f47fba6"
+  },
+  "source": {
+    "repository": "https://github.com/trinodb/trino",
+    "ref": "483",
+    "revision": "50b0b50b75abd47f830b7805ee1b51716eb4065e",
+    "grammar_path": "core/trino-grammar/src/main/antlr4/io/trino/grammar/sql/SqlBase.g4",
+    "grammar_sha256": "dd7f545bd88187969453cd1544747ffcc0f788d02b38ce1f9da0c5e35638d184",
+    "parser_rules": 144,
+    "distinct_alternative_labels": 276,
+    "label_occurrences": 295,
+    "license": "Apache-2.0",
+    "attribution": "Original reduced examples derived from the syntax of Apache Trino 483. Existing family coverage was checked in local pytest sources and collected parameters, not inferred from grammar alone."
+  },
+  "oracle": {
+    "artifact": "io.trino:trino-parser:483",
+    "entry_point": "SqlParser.createStatement",
+    "jdk": "25.0.4.1+1",
+    "parser_jar_sha256": "5711a98df4c40008ab2ded82d31da7f439cf4e1e2d5a01bf9219f782150bda36",
+    "grammar_jar_sha256": "97bd4f18b83e8494ccc4947a0a1dc2276a9a5b3d79f651a22963e1391ea9e452",
+    "harness_sha256": "872483d7aa4d5f6df061bd5e77f687c601fa9f1c30c016d141ef92ade94535a1",
+    "terminating_delimiter": false,
+    "engine_validation": "not_performed"
+  },
+  "contract": {
+    "dialect": "trino",
+    "jinja": "reject",
+    "one_case_one_call": true,
+    "warnings_authority": "Project catalog-name contract; native parser confirms only syntax acceptance, not warnings or engine semantics.",
+    "observations_are_not_expectations": true,
+    "exact_existing_case_matches": 0,
+    "dedup_scope": "Collected pytest parameters and literal strings in tests/test*.py, whitespace/case folded for duplicate candidates; this is not a proof that equivalent SQL is absent.",
+    "coverage_claim": "Selected alternative and interaction coverage only; not 100% of Trino grammar or execution semantics.",
+    "error_location_contract": {
+      "version": 1,
+      "offset_unit": "Zero-based Unicode code-point offset into the exact SQL input, not UTF-8 byte offset.",
+      "position_unit": "One-based line and column; LF advances the line, CRLF is one line break, columns count Unicode code points rather than display width.",
+      "matching": "Convert the reported line/column to a source offset; it must equal one of expected.error_location.anchors[].offset. For each anchor verify sql[offset:] starts with text.",
+      "eof": "An empty anchor text is allowed only at offset == len(sql); this denotes end of input.",
+      "transformations": "Remap anchors and warning positions to the exact wrapper/multiline/Unicode input; do not retain coordinates from the unmodified SQL.",
+      "authority": "Reviewed offending or incomplete syntactic construct. Native parser validity is authoritative; its message and chosen error position are not required to match Rust.",
+      "review": "Alternative anchors must identify the same concrete defect, not an arbitrary point in the statement; changing the set requires review."
+    }
+  },
+  "summary": {
+    "total": 100,
+    "positive": 69,
+    "negative": 31,
+    "false_reject": 49,
+    "false_accept": 7,
+    "regression_control": 44
+  },
+  "implementation_v020": {
+    "expected_full_matches": 100,
+    "pytest_module": "tests/test_v020_trino_grammar_cases.py",
+    "runtime_requires_java": false
+  },
+  "diagnostic_baseline_v019": {
+    "note": "Schema v2 adds normative error anchors without changing SQL or native validity labels. The syntax summary remains unchanged; these diagnostic failures are additional assertions, not independent parser bug families.",
+    "full_expectation_matches": 29,
+    "location_mismatches_among_correctly_rejected": 15,
+    "location_mismatch_ids": [
+      "TF10",
+      "JE11",
+      "JE12",
+      "JE13",
+      "JE14",
+      "JP06",
+      "JP07",
+      "JP08",
+      "JP09",
+      "WP05",
+      "WP06",
+      "WP07",
+      "GE08",
+      "GE09",
+      "GE18"
+    ]
+  },
+  "families": {
+    "within_group": {
+      "work_item": "V020-03",
+      "existing_tests": [
+        "tests/test_sqlglot_trino_cases.py::SQLGLOT_TRINO_POSITIVE_CASES"
+      ],
+      "gap": "Restriction to the unquoted LISTAGG production, nested and CTAS contexts; existing LISTAGG positives are not evidence for rejection of generic WITHIN GROUP."
+    },
+    "table_function": {
+      "work_item": "V020-04",
+      "existing_tests": [
+        "tests/test_validator.py::test_table_function_table_argument_aliases_and_organization_validate",
+        "tests/test_validator.py::test_table_function_organization_preserves_nested_warning_positions"
+      ],
+      "gap": "Contextual COPARTITION aliases and mixed descriptor/table/scalar arguments; table arguments in general are already tested."
+    },
+    "json_encoding": {
+      "work_item": "V020-04",
+      "existing_tests": [
+        "tests/test_trino_v483_coverage.py::APACHE_TRINO_483_REGRESSION_MATRIX"
+      ],
+      "gap": "Encoding in context item, PASSING, constructor and RETURNING positions; encoding in JSON_TABLE column types is already tested."
+    },
+    "json_table_plan": {
+      "work_item": "V020-04",
+      "existing_tests": [
+        "tests/test_trino_v483_coverage.py::SUPPORTED_SQL"
+      ],
+      "gap": "Specific/default PLAN alternatives and their combinations; basic nested JSON_TABLE columns are already tested."
+    },
+    "window_pattern": {
+      "work_item": "V020-07",
+      "existing_tests": [
+        "tests/test_trino_v483_coverage.py::SUPPORTED_SQL"
+      ],
+      "gap": "Window MEASURES/PATTERN, measure reference and named window; relation MATCH_RECOGNIZE is not window coverage."
+    },
+    "row_pattern": {
+      "work_item": "V020-10",
+      "existing_tests": [
+        "tests/test_v018_invalid_sql.py::test_open_pattern_quantifiers_are_valid",
+        "tests/test_v018_invalid_sql.py::test_match_recognize_non_reserved_words_remain_valid_in_measures"
+      ],
+      "gap": "Anchors, empty patterns, contextual skip targets, INITIAL/SEEK and repeated quantifiers; retain already supported permutation/exclusion as controls."
+    },
+    "grammar_edges": {
+      "work_item": "V020-10",
+      "existing_tests": [
+        "tests/test_validator.py::test_trino_expression_extensions_validate",
+        "tests/test_v017_reserved_aliases.py"
+      ],
+      "gap": "Partial predicates in simple CASE, MATCH/UNIQUE predicates and array wildcard; named fields, string dereference and quoted identifiers are controls."
+    }
+  },
+  "cases": [
+    {
+      "id": "WG01",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "primaryExpression/functionCall"
+      ],
+      "sql": "SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 14,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 21,
+              "text": "GROUP"
+            },
+            {
+              "offset": 27,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:28: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG02",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "primaryExpression/functionCall"
+      ],
+      "sql": "SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 29,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 36,
+              "text": "GROUP"
+            },
+            {
+              "offset": 42,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:43: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "percentile_cont"
+        ]
+      }
+    },
+    {
+      "id": "WG03",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "primaryExpression/functionCall"
+      ],
+      "sql": "SELECT custom_agg(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 21,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 28,
+              "text": "GROUP"
+            },
+            {
+              "offset": 34,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:35: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "custom_agg"
+        ]
+      }
+    },
+    {
+      "id": "WG04",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "primaryExpression/functionCall",
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT \"listagg\"(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 20,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 27,
+              "text": "GROUP"
+            },
+            {
+              "offset": 33,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:34: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG05",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "primaryExpression/functionCall"
+      ],
+      "sql": "SELECT coalesce(sum(x) WITHIN GROUP (ORDER BY x), 0) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 23,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 30,
+              "text": "GROUP"
+            },
+            {
+              "offset": 36,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:24: mismatched input 'WITHIN'. Expecting: '%', ')', '*', '+', ',', '-', '.', '/', 'AND', 'AT', 'FILTER', 'IGNORE', 'OR', 'ORDER', 'OVER', 'RESPECT', '[', '||', <predicate>"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG06",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "statement/createTableAsSelect",
+        "primaryExpression/functionCall"
+      ],
+      "sql": "CREATE TABLE dst AS SELECT sum(x) WITHIN GROUP (ORDER BY x) AS n FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 34,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 41,
+              "text": "GROUP"
+            },
+            {
+              "offset": 47,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:48: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG07",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/listagg",
+        "listAggOverflowBehavior",
+        "filter",
+        "over"
+      ],
+      "sql": "SELECT listagg(x, ',' ON OVERFLOW TRUNCATE '...' WITHOUT COUNT) WITHIN GROUP (ORDER BY x) FILTER (WHERE x IS NOT NULL) OVER (PARTITION BY y) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG08",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/functionCall",
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT \"listagg\"(x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "WG09",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/functionCall",
+        "orderBy",
+        "filter",
+        "over"
+      ],
+      "sql": "SELECT custom_agg(x ORDER BY x) FILTER (WHERE x > 0) OVER () FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "custom_agg",
+            "line": 1,
+            "column": 8
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "custom_agg"
+        ]
+      }
+    },
+    {
+      "id": "WG10",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/listagg"
+      ],
+      "sql": "SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) WITHIN GROUP (ORDER BY y) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 49,
+              "text": "WITHIN"
+            },
+            {
+              "offset": 56,
+              "text": "GROUP"
+            },
+            {
+              "offset": 62,
+              "text": "("
+            }
+          ],
+          "reason": "Unsupported or repeated WITHIN GROUP clause; point to a token of that clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:63: mismatched input '('. Expecting: 'BY'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: GROUP",
+          "line": 1,
+          "column": 57
+        }
+      }
+    },
+    {
+      "id": "TF01",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableArgumentRelation",
+        "columnAliases",
+        "nonReserved"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS copartition(a, b)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: table alias requires a name",
+          "line": 1,
+          "column": 56
+        }
+      }
+    },
+    {
+      "id": "TF02",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableArgumentRelation",
+        "columnAliases",
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS \"copartition\"(a, b)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_ptf"
+        ]
+      }
+    },
+    {
+      "id": "TF03",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableArgumentRelation",
+        "nonReserved"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS copartition))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: COPARTITION requires tables",
+          "line": 1,
+          "column": 59
+        }
+      }
+    },
+    {
+      "id": "TF04",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableArgument",
+        "tableFunctionArgument",
+        "descriptorArgument"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) PARTITION BY a ORDER BY b, d => DESCRIPTOR(x integer), n => 5))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: =>",
+          "line": 1,
+          "column": 85
+        }
+      }
+    },
+    {
+      "id": "TF05",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableArgument",
+        "tableFunctionArgument",
+        "descriptorArgument",
+        "copartitionTables"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord(a, b) PARTITION BY a PRUNE WHEN EMPTY ORDER BY b, d => CAST(NULL AS DESCRIPTOR), spec => DESCRIPTOR(x integer, y varchar), n => 5, 'tail' COPARTITION (ord, other)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: =>",
+          "line": 1,
+          "column": 149
+        }
+      }
+    },
+    {
+      "id": "TF06",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableArgument",
+        "descriptorArgument"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) PARTITION BY () KEEP WHEN EMPTY, d => DESCRIPTOR(x)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_ptf"
+        ]
+      }
+    },
+    {
+      "id": "TF07",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableFunctionArgument",
+        "descriptorField"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x missing_type), v => missing_scalar(1)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 1,
+            "column": 51
+          },
+          {
+            "kind": "function",
+            "name": "missing_scalar",
+            "line": 1,
+            "column": 71
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: =>",
+          "line": 1,
+          "column": 35
+        }
+      }
+    },
+    {
+      "id": "TF08",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableFunctionCall",
+        "copartitionTables"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) PARTITION BY a COPARTITION (a, b), (c, d)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_ptf"
+        ]
+      }
+    },
+    {
+      "id": "TF09",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableFunctionArgument",
+        "primaryExpression/functionCall"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR()))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_ptf"
+        ]
+      },
+      "note": "Accepted as an expression/function-call alternative; do not reject solely from the nonempty descriptorArgument production."
+    },
+    {
+      "id": "TF10",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "descriptorField"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 57,
+              "text": ","
+            },
+            {
+              "offset": 58,
+              "text": ")"
+            }
+          ],
+          "reason": "Trailing comma requires another descriptor field or copartition table."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:59: mismatched input ')'. Expecting: <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: =>",
+          "line": 1,
+          "column": 35
+        }
+      }
+    },
+    {
+      "id": "TF11",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableArgument"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) KEEP WHEN EMPTY PRUNE WHEN EMPTY))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 71,
+              "text": "PRUNE"
+            }
+          ],
+          "reason": "Second conflicting empty-table handling clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:72: mismatched input 'PRUNE'. Expecting: ')', ',', 'COPARTITION'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unexpected token in table function table argument",
+          "line": 1,
+          "column": 72
+        }
+      }
+    },
+    {
+      "id": "TF12",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "copartitionTables"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) PARTITION BY a COPARTITION (a, b,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 87,
+              "text": ","
+            },
+            {
+              "offset": 88,
+              "text": ")"
+            }
+          ],
+          "reason": "Trailing comma requires another descriptor field or copartition table."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:89: mismatched input ')'. Expecting: <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: COPARTITION requires a table after comma",
+          "line": 1,
+          "column": 88
+        }
+      }
+    },
+    {
+      "id": "JE01",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonExists",
+        "jsonValueExpression",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 28
+        }
+      }
+    },
+    {
+      "id": "JE02",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonValue",
+        "jsonValueExpression",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_VALUE(X'7B007D00' FORMAT JSON ENCODING UTF16, '$.x')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 31
+        }
+      }
+    },
+    {
+      "id": "JE03",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonQuery",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_QUERY('{}', '$' RETURNING VARBINARY FORMAT JSON ENCODING UTF32)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 49
+        }
+      }
+    },
+    {
+      "id": "JE04",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonExists",
+        "jsonArgument",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_EXISTS('{}', '$x' PASSING X'31' FORMAT JSON ENCODING UTF8 AS x)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: PASSING",
+          "line": 1,
+          "column": 31
+        }
+      }
+    },
+    {
+      "id": "JE05",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonValue",
+        "jsonArgument",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_VALUE('{}', '$x' PASSING X'31' FORMAT JSON ENCODING UTF16 AS x)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: PASSING",
+          "line": 1,
+          "column": 30
+        }
+      }
+    },
+    {
+      "id": "JE06",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonQuery",
+        "jsonArgument",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_QUERY('{}', '$x' PASSING X'31' FORMAT JSON ENCODING UTF32 AS x)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: PASSING",
+          "line": 1,
+          "column": 30
+        }
+      }
+    },
+    {
+      "id": "JE07",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonObject",
+        "jsonObjectMember",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_OBJECT('x' VALUE X'31' FORMAT JSON ENCODING UTF8 RETURNING VARBINARY FORMAT JSON ENCODING UTF16)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 36
+        }
+      }
+    },
+    {
+      "id": "JE08",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonArray",
+        "jsonValueExpression",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_ARRAY(X'31' FORMAT JSON ENCODING UTF32 RETURNING VARBINARY FORMAT JSON ENCODING UTF8)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 25
+        }
+      }
+    },
+    {
+      "id": "JE09",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonValue",
+        "jsonValueBehavior",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_VALUE(missing_json(1) FORMAT JSON ENCODING UTF8, '$' RETURNING missing_type DEFAULT missing_default(0) ON ERROR)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 1,
+            "column": 19
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 1,
+            "column": 76
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 1,
+            "column": 97
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 35
+        }
+      }
+    },
+    {
+      "id": "JE10",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/jsonArray",
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_ARRAY(missing_json(1) FORMAT JSON ENCODING UTF16 RETURNING missing_type FORMAT JSON ENCODING UTF32)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 1,
+            "column": 19
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 1,
+            "column": 72
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 35
+        }
+      }
+    },
+    {
+      "id": "JE11",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 45,
+              "text": "UTF7"
+            }
+          ],
+          "reason": "Unsupported encoding token."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:46: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 25
+        }
+      }
+    },
+    {
+      "id": "JE12",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_EXISTS('{}' FORMAT ENCODING UTF8, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 31,
+              "text": "ENCODING"
+            }
+          ],
+          "reason": "JSON is required before ENCODING."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:32: mismatched input 'ENCODING'. Expecting: 'JSON'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 25
+        }
+      }
+    },
+    {
+      "id": "JE13",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_ARRAY(1 FORMAT JSON ENCODING)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 32,
+              "text": "ENCODING"
+            },
+            {
+              "offset": 40,
+              "text": ")"
+            }
+          ],
+          "reason": "ENCODING lacks its required value."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:41: mismatched input ')'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 21
+        }
+      }
+    },
+    {
+      "id": "JE14",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonRepresentation"
+      ],
+      "sql": "SELECT JSON_QUERY('{}', '$' RETURNING VARBINARY FORMAT JSON ENCODING UTF8 ENCODING UTF16)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 74,
+              "text": "ENCODING"
+            }
+          ],
+          "reason": "Repeated ENCODING clause."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:75: mismatched input 'ENCODING'. Expecting: ')', 'EMPTY', 'ERROR', 'KEEP', 'NULL', 'OMIT', 'WITH', 'WITHOUT'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 49
+        }
+      }
+    },
+    {
+      "id": "JP01",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableSpecificPlan",
+        "planPrimary"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN (root OUTER (a CROSS b)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP02",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableSpecificPlan",
+        "relationPrimary/jsonTable"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN (root INNER (a UNION b)) ERROR ON ERROR)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP03",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableDefaultPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN DEFAULT (OUTER, UNION))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP04",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableDefaultPlan",
+        "relationPrimary/jsonTable"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN DEFAULT (CROSS, INNER) EMPTY ON ERROR)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP05",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableDefaultPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN DEFAULT (INNER))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP06",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonTableSpecificPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN (root OUTER (a CROSS)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 202,
+              "text": "CROSS"
+            },
+            {
+              "offset": 207,
+              "text": ")"
+            }
+          ],
+          "reason": "CROSS lacks its right plan operand."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:208: mismatched input ')'. Expecting: '(', <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP07",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonTableSpecificPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 188,
+              "text": ")"
+            }
+          ],
+          "reason": "Empty specific PLAN is not a path or join plan."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:189: mismatched input ')'. Expecting: '(', <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP08",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonTableDefaultPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN DEFAULT (OUTER, INNER))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 203,
+              "text": "INNER"
+            }
+          ],
+          "reason": "Second default-plan item must be UNION or CROSS after OUTER."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:204: mismatched input 'INNER'. Expecting: 'CROSS', 'UNION'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP09",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "jsonTableDefaultPlan"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id', NESTED PATH '$.a' AS a COLUMNS (x INTEGER PATH '$'), NESTED PATH '$.b' AS b COLUMNS (y INTEGER PATH '$')) PLAN DEFAULT (OUTER, UNION, CROSS))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 208,
+              "text": ","
+            }
+          ],
+          "reason": "Unexpected third default-plan item."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:209: mismatched input ','. Expecting: ')'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 183
+        }
+      }
+    },
+    {
+      "id": "JP10",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "jsonTableSpecificPlan",
+        "jsonTableColumn",
+        "jsonValueBehavior"
+      ],
+      "sql": "SELECT * FROM JSON_TABLE(missing_json(1), '$' AS root COLUMNS (x missing_type DEFAULT missing_default(0) ON EMPTY, NESTED PATH '$.a' AS a COLUMNS (y INTEGER)) PLAN (root OUTER a))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 1,
+            "column": 26
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 1,
+            "column": 66
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 1,
+            "column": 87
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 160
+        }
+      }
+    },
+    {
+      "id": "WP01",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/measure",
+        "windowFrame"
+      ],
+      "sql": "SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP02",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "windowFrame",
+        "subsetDefinition",
+        "skipTo"
+      ],
+      "sql": "SELECT rank() OVER (PARTITION BY x ORDER BY y MEASURES LAST(A.z) AS last_z ROWS BETWEEN CURRENT ROW AND 5 FOLLOWING AFTER MATCH SKIP TO NEXT ROW SEEK PATTERN (A B) SUBSET U = (A, B) DEFINE B AS false) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ROWS, RANGE, GROUPS, found: MEASURES",
+          "line": 1,
+          "column": 47
+        }
+      }
+    },
+    {
+      "id": "WP03",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/measure",
+        "over",
+        "windowDefinition",
+        "windowFrame"
+      ],
+      "sql": "SELECT last_z OVER w FROM t WINDOW w AS (MEASURES LAST(A.z) AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: w",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP04",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/measure",
+        "measureDefinition",
+        "variableDefinition"
+      ],
+      "sql": "SELECT last_z OVER (MEASURES missing_measure(z) AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS missing_define(z)) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_measure",
+            "line": 1,
+            "column": 30
+          },
+          {
+            "kind": "function",
+            "name": "missing_define",
+            "line": 1,
+            "column": 100
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP05",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "windowFrame",
+        "frameExtent"
+      ],
+      "sql": "SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 41,
+              "text": "PATTERN"
+            }
+          ],
+          "reason": "Required frame extent is missing before PATTERN."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:42: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP06",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "measureDefinition"
+      ],
+      "sql": "SELECT last_z OVER (MEASURES z last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 31,
+              "text": "last_z"
+            }
+          ],
+          "reason": "Measure alias must be preceded by AS."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:32: mismatched input 'last_z'. Expecting: '%', '(', '*', '+', '-', '->', '.', '/', '::', 'AND', 'AS', 'AT', 'OR', 'OVER', '[', '||', <predicate>, <string>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP07",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "rowPattern"
+      ],
+      "sql": "SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN () DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 67,
+              "text": ")"
+            }
+          ],
+          "reason": "The pattern body is absent; empty pattern syntax would require an additional pair of parentheses."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:68: mismatched input ')'. Expecting: '$', '(', 'PERMUTE', '^', '{-', <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "WP08",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "windowFrame"
+      ],
+      "sql": "SELECT sum(x) OVER (ROWS CURRENT ROW INITIAL PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: INITIAL",
+          "line": 1,
+          "column": 38
+        }
+      }
+    },
+    {
+      "id": "RP01",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "emptyMatchHandling",
+        "skipTo",
+        "patternRecognition",
+        "patternPrimary",
+        "patternQuantifier"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (ALL ROWS PER MATCH WITH UNMATCHED ROWS AFTER MATCH SKIP TO FIRST A SEEK PATTERN (^ (A | B)+? $) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Trino does not support $ placeholders",
+          "line": 1,
+          "column": 127
+        }
+      }
+    },
+    {
+      "id": "RP02",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "emptyMatchHandling",
+        "skipTo",
+        "patternRecognition",
+        "patternPrimary"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (ALL ROWS PER MATCH OMIT EMPTY MATCHES AFTER MATCH SKIP TO LAST B INITIAL PATTERN (PERMUTE(A, B) {- A -}) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: PATTERN, found: INITIAL",
+          "line": 1,
+          "column": 99
+        }
+      }
+    },
+    {
+      "id": "RP03",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "emptyMatchHandling",
+        "skipTo",
+        "patternPrimary",
+        "patternQuantifier"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (ALL ROWS PER MATCH SHOW EMPTY MATCHES AFTER MATCH SKIP TO B PATTERN (() A{2,4}? B{,3}) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: after match skip option, found: TO",
+          "line": 1,
+          "column": 89
+        }
+      }
+    },
+    {
+      "id": "RP04",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "patternQuantifier/rangeQuantifier"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (ONE ROW PER MATCH PATTERN (A{4,2}) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      },
+      "note": "Syntax accepts reversed quantifier bounds; engine semantic validation is outside this corpus."
+    },
+    {
+      "id": "RP05",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "rowsPerMatch",
+        "emptyMatchHandling"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (ONE ROW PER MATCH SHOW EMPTY MATCHES PATTERN (A) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 51,
+              "text": "SHOW"
+            }
+          ],
+          "reason": "SHOW EMPTY MATCHES is not allowed after ONE ROW PER MATCH."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:52: mismatched input 'SHOW'. Expecting: 'AFTER', 'INITIAL', 'PATTERN', 'SEEK'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: PATTERN, found: SHOW",
+          "line": 1,
+          "column": 52
+        }
+      }
+    },
+    {
+      "id": "RP06",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "skipTo",
+        "nonReserved"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (AFTER MATCH SKIP TO FIRST PATTERN (A) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: PATTERN, found: (",
+          "line": 1,
+          "column": 68
+        }
+      },
+      "note": "FIRST is non-reserved and is the identifier in SKIP TO identifier; this is not an incomplete SKIP TO FIRST identifier."
+    },
+    {
+      "id": "RP07",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "patternPrimary",
+        "nonReserved",
+        "rowPattern/patternConcatenation"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (PERMUTE()) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: identifier, found: )",
+          "line": 1,
+          "column": 52
+        }
+      },
+      "note": "PERMUTE is non-reserved: PERMUTE followed by the empty pattern () is a valid concatenation, not an empty permutation production."
+    },
+    {
+      "id": "RP08",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "patternPrimary/excludedPattern"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN ({- -}) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 46,
+              "text": "-}"
+            }
+          ],
+          "reason": "Excluded pattern body is absent."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:47: mismatched input '-}'. Expecting: '$', '(', 'PERMUTE', '^', '{-', <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: identifier, found: -",
+          "line": 1,
+          "column": 47
+        }
+      }
+    },
+    {
+      "id": "GE01",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "fieldConstructor",
+        "selectItem/selectAll",
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT ROW(1 AS \"where\", 2 AS \"from\").* AS (\"select\", \"drop\")",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "GE02",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "simpleWhenClause",
+        "predicate"
+      ],
+      "sql": "SELECT CASE x WHEN BETWEEN 1 AND 3 THEN 'low' WHEN IS NULL THEN 'missing' ELSE 'other' END FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: WHEN",
+          "line": 1,
+          "column": 15
+        }
+      }
+    },
+    {
+      "id": "GE03",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/arrayWildcardSubscript",
+        "primaryExpression/stringLiteralDereference"
+      ],
+      "sql": "SELECT ARRAY[ROW(1), ROW(2)][*].'field'",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: an expression, found: *",
+          "line": 1,
+          "column": 30
+        }
+      }
+    },
+    {
+      "id": "GE04",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "rowField",
+        "intervalQualifier",
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT CAST(NULL AS ROW(\"where\" INTERVAL DAY(3) TO SECOND(2)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "GE05",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "predicate/match"
+      ],
+      "sql": "SELECT (1, 2) MATCH UNIQUE FULL (SELECT a, b FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: No infix parser for token Word(Word { value: \"MATCH\", quote_style: None, keyword: MATCH })",
+          "line": 1,
+          "column": 15
+        }
+      }
+    },
+    {
+      "id": "GE06",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "predicate/overlaps"
+      ],
+      "sql": "SELECT DATE '2024-01-01' OVERLAPS DATE '2024-01-02'",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      },
+      "note": "Parser-only expectation; type semantics deliberately excluded"
+    },
+    {
+      "id": "GE07",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/staticMethodCall",
+        "methodName"
+      ],
+      "sql": "SELECT bigint::select(value => 1)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "select",
+            "line": 1,
+            "column": 16
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "select"
+        ]
+      }
+    },
+    {
+      "id": "GE08",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "simpleWhenClause",
+        "predicate/between"
+      ],
+      "sql": "SELECT CASE x WHEN BETWEEN 1 THEN 2 END FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 29,
+              "text": "THEN"
+            }
+          ],
+          "reason": "BETWEEN lacks AND and an upper bound before THEN."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:30: mismatched input 'THEN'. Expecting: '%', '*', '+', '-', '.', '/', 'AND', 'AT', '[', '||'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: WHEN",
+          "line": 1,
+          "column": 15
+        }
+      }
+    },
+    {
+      "id": "GE09",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "fieldConstructor"
+      ],
+      "sql": "SELECT ROW(1 AS \"where\", 2 AS)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 27,
+              "text": "AS"
+            },
+            {
+              "offset": 29,
+              "text": ")"
+            }
+          ],
+          "reason": "Second ROW field AS has no alias."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:30: mismatched input ')'. Expecting: <identifier>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: AS",
+          "line": 1,
+          "column": 14
+        }
+      }
+    },
+    {
+      "id": "GE10",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "intervalQualifier/compositeDayTimeInterval"
+      ],
+      "sql": "SELECT CAST(NULL AS INTERVAL DAY(3) TO SECOND(2, 4))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 45,
+              "text": "("
+            },
+            {
+              "offset": 47,
+              "text": ","
+            }
+          ],
+          "reason": "SECOND in this composite interval accepts one precision, not two."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:48: mismatched input ','. Expecting: ')'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: invalid interval precision",
+          "line": 1,
+          "column": 46
+        }
+      }
+    },
+    {
+      "id": "GE11",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "identifier/quotedIdentifier"
+      ],
+      "sql": "SELECT 1 AS \"\"",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 12,
+              "text": "\"\""
+            }
+          ],
+          "reason": "Empty quoted identifier."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:13: Zero-length delimited identifier not allowed"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Zero-length delimited identifier not allowed",
+          "line": 1,
+          "column": 13
+        }
+      },
+      "note": "PostProcessor boundary: grammar token alone is insufficient"
+    },
+    {
+      "id": "GE12",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/unique"
+      ],
+      "sql": "SELECT UNIQUE (SELECT x FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: x",
+          "line": 1,
+          "column": 23
+        }
+      }
+    },
+    {
+      "id": "RP09",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "patternPrimary/partitionEndAnchor"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (A $) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Trino does not support $ placeholders",
+          "line": 1,
+          "column": 46
+        }
+      }
+    },
+    {
+      "id": "RP10",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "patternPrimary/partitionStartAnchor"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (^ A) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "RP11",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "patternRecognition"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: PATTERN, found: SEEK",
+          "line": 1,
+          "column": 34
+        }
+      }
+    },
+    {
+      "id": "RP12",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "patternRecognition"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (INITIAL PATTERN (A) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: PATTERN, found: INITIAL",
+          "line": 1,
+          "column": 34
+        }
+      }
+    },
+    {
+      "id": "RP13",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "skipTo"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (AFTER MATCH SKIP TO B PATTERN (A B) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: after match skip option, found: TO",
+          "line": 1,
+          "column": 51
+        }
+      }
+    },
+    {
+      "id": "RP14",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "patternPrimary/emptyPattern"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (()) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: identifier, found: )",
+          "line": 1,
+          "column": 45
+        }
+      }
+    },
+    {
+      "id": "RP15",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "patternPrimary/patternPermutation"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (PERMUTE(A, B)) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "RP16",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "patternPrimary/excludedPattern"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN ({- A -} B) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "RP17",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "false_accept",
+      "grammar_refs": [
+        "rowPattern/quantifiedPrimary",
+        "patternQuantifier"
+      ],
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE ( PATTERN (A**) DEFINE A AS true, B AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 45,
+              "text": "*"
+            }
+          ],
+          "reason": "Unexpected second quantifier."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:46: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "RP18",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/parameter"
+      ],
+      "sql": "SELECT $1",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 7,
+              "text": "$1"
+            }
+          ],
+          "reason": "Dollar placeholder is invalid outside row-pattern syntax."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:8: mismatched input '$'. Expecting: '*', 'ALL', 'DISTINCT', <expression>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Trino does not support $ placeholders",
+          "line": 1,
+          "column": 8
+        }
+      }
+    },
+    {
+      "id": "RP19",
+      "family": "row_pattern",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "string/basicStringLiteral"
+      ],
+      "sql": "SELECT '$' AS symbol",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "GE13",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/arrayWildcardSubscript"
+      ],
+      "sql": "SELECT ARRAY[1, 2][*]",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: an expression, found: *",
+          "line": 1,
+          "column": 20
+        }
+      }
+    },
+    {
+      "id": "GE14",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/stringLiteralDereference"
+      ],
+      "sql": "SELECT ROW(1).'field'",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    },
+    {
+      "id": "GE15",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/unique"
+      ],
+      "sql": "SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 23
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: missing_inner",
+          "line": 1,
+          "column": 23
+        }
+      }
+    },
+    {
+      "id": "GE16",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "predicate/match"
+      ],
+      "sql": "SELECT ROW(missing_outer(1)) MATCH PARTIAL (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_outer",
+            "line": 1,
+            "column": 12
+          },
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 52
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: No infix parser for token Word(Word { value: \"MATCH\", quote_style: None, keyword: MATCH })",
+          "line": 1,
+          "column": 30
+        }
+      }
+    },
+    {
+      "id": "GE17",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "simpleWhenClause",
+        "predicate/comparison"
+      ],
+      "sql": "SELECT CASE missing_input(1) WHEN > missing_bound(2) THEN missing_result(3) ELSE 0 END",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_input",
+            "line": 1,
+            "column": 13
+          },
+          {
+            "kind": "function",
+            "name": "missing_bound",
+            "line": 1,
+            "column": 37
+          },
+          {
+            "kind": "function",
+            "name": "missing_result",
+            "line": 1,
+            "column": 59
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 26
+        }
+      }
+    },
+    {
+      "id": "GE18",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "predicate/match"
+      ],
+      "sql": "SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 33,
+              "text": ")"
+            }
+          ],
+          "reason": "MATCH requires a query inside its parentheses."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:34: mismatched input ')'. Expecting: <query>"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: No infix parser for token Word(Word { value: \"MATCH\", quote_style: None, keyword: MATCH })",
+          "line": 1,
+          "column": 15
+        }
+      }
+    },
+    {
+      "id": "GE19",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "primaryExpression/unique",
+        "queryPrimary/inlineTable"
+      ],
+      "sql": "SELECT UNIQUE (VALUES 1, 2)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: 1",
+          "line": 1,
+          "column": 23
+        }
+      }
+    },
+    {
+      "id": "GE20",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/arrayWildcardSubscript"
+      ],
+      "sql": "SELECT ARRAY[1, 2][*",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location_required": true,
+        "error_location": {
+          "anchors": [
+            {
+              "offset": 18,
+              "text": "["
+            },
+            {
+              "offset": 20,
+              "text": ""
+            }
+          ],
+          "reason": "Unclosed subscript: either the unmatched opener or end of input is an accurate diagnostic anchor."
+        }
+      },
+      "oracle": {
+        "state": "rejected",
+        "error": "line 1:21: mismatched input '<EOF>'. Expecting: ']'"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unterminated group",
+          "line": 1,
+          "column": 19
+        }
+      }
+    },
+    {
+      "id": "GE21",
+      "family": "grammar_edges",
+      "work_item": "V020-10",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/stringLiteralDereference"
+      ],
+      "sql": "SELECT missing_row(1).'field'",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_row",
+            "line": 1,
+            "column": 8
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_row"
+        ]
+      }
+    },
+    {
+      "id": "TF13",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "tableArgumentRelation",
+        "tableArgument",
+        "copartitionTables"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS copartition(a, b) PARTITION BY a COPARTITION (copartition, other)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unexpected token after COPARTITION table list",
+          "line": 1,
+          "column": 77
+        }
+      }
+    },
+    {
+      "id": "TF14",
+      "family": "table_function",
+      "work_item": "V020-04",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "tableArgument",
+        "tableFunctionArgument"
+      ],
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) PARTITION BY a ORDER BY b, n => missing_scalar(1)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          },
+          {
+            "kind": "function",
+            "name": "missing_scalar",
+            "line": 1,
+            "column": 88
+          }
+        ],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": [
+          "missing_ptf",
+          "missing_scalar"
+        ]
+      }
+    },
+    {
+      "id": "JE15",
+      "family": "json_encoding",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "statement/createTableAsSelect",
+        "primaryExpression/jsonQuery",
+        "jsonRepresentation"
+      ],
+      "sql": "CREATE TABLE dst AS SELECT JSON_QUERY('{}', '$' RETURNING VARBINARY FORMAT JSON ENCODING UTF8) AS payload",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: ), found: FORMAT",
+          "line": 1,
+          "column": 69
+        }
+      }
+    },
+    {
+      "id": "JP11",
+      "family": "json_table_plan",
+      "work_item": "V020-04",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "statement/explain",
+        "jsonTableSpecificPlan"
+      ],
+      "sql": "EXPLAIN SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (NESTED PATH '$.a' AS a COLUMNS (x INTEGER)) PLAN (root OUTER a))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: unsupported JSON_TABLE error behavior",
+          "line": 1,
+          "column": 105
+        }
+      }
+    },
+    {
+      "id": "WP09",
+      "family": "window_pattern",
+      "work_item": "V020-07",
+      "coverage_role": "false_reject",
+      "grammar_refs": [
+        "statement/insertInto",
+        "primaryExpression/measure",
+        "windowFrame"
+      ],
+      "sql": "INSERT INTO dst SELECT last_z OVER (MEASURES LAST(A.z) AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": false,
+        "statement_count": 0,
+        "warning_names": [],
+        "error": {
+          "message": "sql parser error: Expected: end of statement, found: (",
+          "line": 1,
+          "column": 36
+        }
+      }
+    },
+    {
+      "id": "WG11",
+      "family": "within_group",
+      "work_item": "V020-03",
+      "coverage_role": "regression_control",
+      "grammar_refs": [
+        "primaryExpression/functionCall",
+        "string"
+      ],
+      "sql": "SELECT 'WITHIN GROUP (ORDER BY x)' AS text, sum(x) /* WITHIN GROUP */ FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [],
+        "error_location_required": false
+      },
+      "oracle": {
+        "state": "accepted"
+      },
+      "observed_v019": {
+        "valid": true,
+        "statement_count": 1,
+        "warning_names": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,821 @@
+{
+  "schema_version": 1,
+  "source": {
+    "trino_ref": "483",
+    "composition_sha256": "7db96865151fe26a0e0508acc5526e877ec54f5ebc747ad1af00f513ed75cdd1",
+    "construction": "Unicode block comment, LF/CRLF, two-space indentation"
+  },
+  "summary": {
+    "total": 28,
+    "positive": 14,
+    "negative": 14
+  },
+  "cases": [
+    {
+      "id": "TR-within_group-positive-lf",
+      "family": "within_group",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT listagg(missing_value(x), ',') WITHIN GROUP (ORDER BY missing_order(x)) AS \"where\" FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_value",
+            "line": 2,
+            "column": 18
+          },
+          {
+            "kind": "function",
+            "name": "missing_order",
+            "line": 2,
+            "column": 64
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-within_group-negative-lf",
+      "family": "within_group",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 17,
+          "offset": 32,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-within_group-positive-crlf",
+      "family": "within_group",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT listagg(missing_value(x), ',') WITHIN GROUP (ORDER BY missing_order(x)) AS \"where\" FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_value",
+            "line": 2,
+            "column": 18
+          },
+          {
+            "kind": "function",
+            "name": "missing_order",
+            "line": 2,
+            "column": 64
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-within_group-negative-crlf",
+      "family": "within_group",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 17,
+          "offset": 33,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-table_function-positive-lf",
+      "family": "table_function",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x missing_type), v => missing_scalar(1))) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 2,
+            "column": 23
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 53
+          },
+          {
+            "kind": "function",
+            "name": "missing_scalar",
+            "line": 2,
+            "column": 73
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-table_function-negative-lf",
+      "family": "table_function",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 60,
+          "offset": 75,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-table_function-positive-crlf",
+      "family": "table_function",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x missing_type), v => missing_scalar(1))) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 2,
+            "column": 23
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 53
+          },
+          {
+            "kind": "function",
+            "name": "missing_scalar",
+            "line": 2,
+            "column": 73
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-table_function-negative-crlf",
+      "family": "table_function",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 60,
+          "offset": 76,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-json_encoding-positive-lf",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT JSON_VALUE(missing_json(1) FORMAT JSON ENCODING UTF8, '$x' PASSING missing_pass(2) FORMAT JSON ENCODING UTF16 AS x RETURNING missing_type DEFAULT missing_default(0) ON ERROR) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 2,
+            "column": 21
+          },
+          {
+            "kind": "function",
+            "name": "missing_pass",
+            "line": 2,
+            "column": 77
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 135
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 2,
+            "column": 156
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-json_encoding-negative-lf",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 48,
+          "offset": 63,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-json_encoding-positive-crlf",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT JSON_VALUE(missing_json(1) FORMAT JSON ENCODING UTF8, '$x' PASSING missing_pass(2) FORMAT JSON ENCODING UTF16 AS x RETURNING missing_type DEFAULT missing_default(0) ON ERROR) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 2,
+            "column": 21
+          },
+          {
+            "kind": "function",
+            "name": "missing_pass",
+            "line": 2,
+            "column": 77
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 135
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 2,
+            "column": 156
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-json_encoding-negative-crlf",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 48,
+          "offset": 64,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-json_table_plan-positive-lf",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM JSON_TABLE(missing_json(1), '$' AS root COLUMNS (x missing_type DEFAULT missing_default(0) ON EMPTY, NESTED PATH '$.a' AS a COLUMNS (y INTEGER)) PLAN (root OUTER a)) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 2,
+            "column": 28
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 68
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 2,
+            "column": 89
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-json_table_plan-negative-lf",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 85,
+          "offset": 100,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-json_table_plan-positive-crlf",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM JSON_TABLE(missing_json(1), '$' AS root COLUMNS (x missing_type DEFAULT missing_default(0) ON EMPTY, NESTED PATH '$.a' AS a COLUMNS (y INTEGER)) PLAN (root OUTER a)) AS \"where\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_json",
+            "line": 2,
+            "column": 28
+          },
+          {
+            "kind": "type",
+            "name": "missing_type",
+            "line": 2,
+            "column": 68
+          },
+          {
+            "kind": "function",
+            "name": "missing_default",
+            "line": 2,
+            "column": 89
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-json_table_plan-negative-crlf",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 85,
+          "offset": 101,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-window_pattern-positive-lf",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT \"where\" OVER (PARTITION BY missing_partition(x) ORDER BY missing_order(y) MEASURES missing_measure(z) AS \"where\" ROWS BETWEEN missing_start(1) PRECEDING AND missing_end(1) FOLLOWING PATTERN (A) DEFINE A AS missing_define(z)) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_partition",
+            "line": 2,
+            "column": 37
+          },
+          {
+            "kind": "function",
+            "name": "missing_order",
+            "line": 2,
+            "column": 67
+          },
+          {
+            "kind": "function",
+            "name": "missing_measure",
+            "line": 2,
+            "column": 93
+          },
+          {
+            "kind": "function",
+            "name": "missing_start",
+            "line": 2,
+            "column": 136
+          },
+          {
+            "kind": "function",
+            "name": "missing_end",
+            "line": 2,
+            "column": 167
+          },
+          {
+            "kind": "function",
+            "name": "missing_define",
+            "line": 2,
+            "column": 216
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-window_pattern-negative-lf",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 44,
+          "offset": 59,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-window_pattern-positive-crlf",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT \"where\" OVER (PARTITION BY missing_partition(x) ORDER BY missing_order(y) MEASURES missing_measure(z) AS \"where\" ROWS BETWEEN missing_start(1) PRECEDING AND missing_end(1) FOLLOWING PATTERN (A) DEFINE A AS missing_define(z)) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_partition",
+            "line": 2,
+            "column": 37
+          },
+          {
+            "kind": "function",
+            "name": "missing_order",
+            "line": 2,
+            "column": 67
+          },
+          {
+            "kind": "function",
+            "name": "missing_measure",
+            "line": 2,
+            "column": 93
+          },
+          {
+            "kind": "function",
+            "name": "missing_start",
+            "line": 2,
+            "column": 136
+          },
+          {
+            "kind": "function",
+            "name": "missing_end",
+            "line": 2,
+            "column": 167
+          },
+          {
+            "kind": "function",
+            "name": "missing_define",
+            "line": 2,
+            "column": 216
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-window_pattern-negative-crlf",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 44,
+          "offset": 60,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-row_pattern-positive-lf",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM t MATCH_RECOGNIZE (MEASURES missing_measure(A.x) AS \"where\" AFTER MATCH SKIP TO NEXT ROW PATTERN (A $) DEFINE A AS missing_define(A.x)) AS \"from\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_measure",
+            "line": 2,
+            "column": 45
+          },
+          {
+            "kind": "function",
+            "name": "missing_define",
+            "line": 2,
+            "column": 132
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-row_pattern-negative-lf",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 47,
+          "offset": 62,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-row_pattern-positive-crlf",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM t MATCH_RECOGNIZE (MEASURES missing_measure(A.x) AS \"where\" AFTER MATCH SKIP TO NEXT ROW PATTERN (A $) DEFINE A AS missing_define(A.x)) AS \"from\"",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_measure",
+            "line": 2,
+            "column": 45
+          },
+          {
+            "kind": "function",
+            "name": "missing_define",
+            "line": 2,
+            "column": 132
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-row_pattern-negative-crlf",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 47,
+          "offset": 63,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-grammar_edges-positive-lf",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT CASE missing_input(x) WHEN BETWEEN missing_lower(1) AND missing_upper(2) THEN missing_result(3) END AS \"where\" FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_input",
+            "line": 2,
+            "column": 15
+          },
+          {
+            "kind": "function",
+            "name": "missing_lower",
+            "line": 2,
+            "column": 45
+          },
+          {
+            "kind": "function",
+            "name": "missing_upper",
+            "line": 2,
+            "column": 66
+          },
+          {
+            "kind": "function",
+            "name": "missing_result",
+            "line": 2,
+            "column": 88
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-grammar_edges-negative-lf",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "newline": "lf",
+      "sql": "/* Unicode ☃ */\n  SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 36,
+          "offset": 51,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    },
+    {
+      "id": "TR-grammar_edges-positive-crlf",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT CASE missing_input(x) WHEN BETWEEN missing_lower(1) AND missing_upper(2) THEN missing_result(3) END AS \"where\" FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_input",
+            "line": 2,
+            "column": 15
+          },
+          {
+            "kind": "function",
+            "name": "missing_lower",
+            "line": 2,
+            "column": 45
+          },
+          {
+            "kind": "function",
+            "name": "missing_upper",
+            "line": 2,
+            "column": 66
+          },
+          {
+            "kind": "function",
+            "name": "missing_result",
+            "line": 2,
+            "column": 88
+          }
+        ]
+      },
+      "oracle": {
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "TR-grammar_edges-negative-crlf",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "newline": "crlf",
+      "sql": "/* Unicode ☃ */\r\n  SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "line": 2,
+          "column": 36,
+          "offset": 52,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "status": "rejected"
+      }
+    }
+  ]
+}

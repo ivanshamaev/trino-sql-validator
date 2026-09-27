@@ -1,0 +1,1826 @@
+{
+  "schema_version": 1,
+  "purpose": "Native-Trino-verified family/polarity/wrapper composition matrix.",
+  "audited_on": "2026-09-26",
+  "source": {
+    "trino_version": "483",
+    "entry_point": "createStatement",
+    "oracle_report_corpus_sha256": "5e5004433706c0a80740d786b1eb100f47cd3f597513e8fd3fd0d2570e933bd2",
+    "matrix_cells": 84
+  },
+  "summary": {
+    "total": 84,
+    "positive": 42,
+    "negative": 42,
+    "families": 7,
+    "wrappers": 6
+  },
+  "cases": [
+    {
+      "id": "CMP-within_group-positive-root",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-positive-explain",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-positive-prepare",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-positive-ctas",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-positive-create_view",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-positive-insert",
+      "family": "within_group",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT listagg(x, ',') WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-within_group-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-root",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 14,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 28,
+        "message": "line 1:28: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-explain",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 22,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 36,
+        "message": "line 1:36: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-prepare",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 29,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 43,
+        "message": "line 1:43: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-ctas",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 42,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 56,
+        "message": "line 1:56: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-create_view",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 42,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 56,
+        "message": "line 1:56: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-within_group-negative-insert",
+      "family": "within_group",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 38,
+          "text": "WITHIN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-within_group-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 52,
+        "message": "line 1:52: mismatched input '('. Expecting: 'BY'"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-root",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 21
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-explain",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 29
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-prepare",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 36
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-ctas",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 49
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-create_view",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 49
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-positive-insert",
+      "family": "table_function",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM TABLE(missing_ptf(input => TABLE(orders) AS ord PARTITION BY a, d => DESCRIPTOR(x integer)))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_ptf",
+            "line": 1,
+            "column": 45
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-table_function-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-root",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 57,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 59,
+        "message": "line 1:59: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-explain",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 65,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 67,
+        "message": "line 1:67: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-prepare",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 72,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 74,
+        "message": "line 1:74: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-ctas",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 85,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 87,
+        "message": "line 1:87: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-create_view",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 85,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 87,
+        "message": "line 1:87: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-table_function-negative-insert",
+      "family": "table_function",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM TABLE(missing_ptf(d => DESCRIPTOR(x integer,)))",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 81,
+          "text": ","
+        }
+      },
+      "oracle": {
+        "id": "CMP-table_function-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 83,
+        "message": "line 1:83: mismatched input ')'. Expecting: <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-root",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-explain",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-prepare",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-ctas",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-create_view",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-positive-insert",
+      "family": "json_encoding",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT JSON_EXISTS(X'7B7D' FORMAT JSON ENCODING UTF8, '$')",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-root",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 45,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 46,
+        "message": "line 1:46: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-explain",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 53,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 54,
+        "message": "line 1:54: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-prepare",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 60,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 61,
+        "message": "line 1:61: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-ctas",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 73,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 74,
+        "message": "line 1:74: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-create_view",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 73,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 74,
+        "message": "line 1:74: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_encoding-negative-insert",
+      "family": "json_encoding",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT JSON_EXISTS('{}' FORMAT JSON ENCODING UTF7, '$')",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 69,
+          "text": "UTF7"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_encoding-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 70,
+        "message": "line 1:70: mismatched input 'UTF7'. Expecting: 'UTF16', 'UTF32', 'UTF8'"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-root",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-explain",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-prepare",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-ctas",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-create_view",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-positive-insert",
+      "family": "json_table_plan",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN (root))",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-root",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 82,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 83,
+        "message": "line 1:83: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-explain",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 90,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 91,
+        "message": "line 1:91: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-prepare",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 97,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 98,
+        "message": "line 1:98: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-ctas",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 110,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 111,
+        "message": "line 1:111: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-create_view",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 110,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 111,
+        "message": "line 1:111: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-json_table_plan-negative-insert",
+      "family": "json_table_plan",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM JSON_TABLE('{}', '$' AS root COLUMNS (id INTEGER PATH '$.id') PLAN ())",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 106,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-json_table_plan-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 107,
+        "message": "line 1:107: mismatched input ')'. Expecting: '(', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-root",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-explain",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-prepare",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-ctas",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-create_view",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-positive-insert",
+      "family": "window_pattern",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT last_z OVER (MEASURES z AS last_z ROWS CURRENT ROW PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-root",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 41,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 42,
+        "message": "line 1:42: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-explain",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 49,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 50,
+        "message": "line 1:50: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-prepare",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 56,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 57,
+        "message": "line 1:57: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-ctas",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 69,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 70,
+        "message": "line 1:70: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-create_view",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 69,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 70,
+        "message": "line 1:70: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-window_pattern-negative-insert",
+      "family": "window_pattern",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT last_z OVER (MEASURES z AS last_z PATTERN (A) DEFINE A AS true) FROM t",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 65,
+          "text": "PATTERN"
+        }
+      },
+      "oracle": {
+        "id": "CMP-window_pattern-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 66,
+        "message": "line 1:66: mismatched input 'PATTERN'. Expecting: ',', 'GROUPS', 'RANGE', 'ROWS'"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-root",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-explain",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-prepare",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-ctas",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-create_view",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-positive-insert",
+      "family": "row_pattern",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM t MATCH_RECOGNIZE (SEEK PATTERN (A $) DEFINE A AS true)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": []
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-root",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 44,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 45,
+        "message": "line 1:45: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-explain",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 52,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 53,
+        "message": "line 1:53: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-prepare",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 59,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 60,
+        "message": "line 1:60: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-ctas",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 72,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 73,
+        "message": "line 1:73: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-create_view",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 72,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 73,
+        "message": "line 1:73: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-row_pattern-negative-insert",
+      "family": "row_pattern",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT * FROM t MATCH_RECOGNIZE (PATTERN (A**) DEFINE A AS true)",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 68,
+          "text": "*"
+        }
+      },
+      "oracle": {
+        "id": "CMP-row_pattern-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 69,
+        "message": "line 1:69: mismatched input '*'. Expecting: '$', '(', ')', '?', 'PERMUTE', '^', '{-', '|', <identifier>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-root",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 23
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-root",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-explain",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 31
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-explain",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-prepare",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 38
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-prepare",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-ctas",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 51
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-ctas",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-create_view",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 51
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-create_view",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-positive-insert",
+      "family": "grammar_edges",
+      "polarity": "positive",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT UNIQUE (SELECT missing_inner(x) FROM t)",
+      "expected": {
+        "valid": true,
+        "statement_count": 1,
+        "warnings": [
+          {
+            "kind": "function",
+            "name": "missing_inner",
+            "line": 1,
+            "column": 47
+          }
+        ]
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-positive-insert",
+        "status": "accepted"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-root",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "root",
+      "entry_point": "createStatement",
+      "sql": "SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 33,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-root",
+        "status": "rejected",
+        "line": 1,
+        "column": 34,
+        "message": "line 1:34: mismatched input ')'. Expecting: <query>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-explain",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "explain",
+      "entry_point": "createStatement",
+      "sql": "EXPLAIN SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 41,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-explain",
+        "status": "rejected",
+        "line": 1,
+        "column": 42,
+        "message": "line 1:42: mismatched input ')'. Expecting: <query>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-prepare",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "prepare",
+      "entry_point": "createStatement",
+      "sql": "PREPARE p FROM SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 48,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-prepare",
+        "status": "rejected",
+        "line": 1,
+        "column": 49,
+        "message": "line 1:49: mismatched input ')'. Expecting: <query>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-ctas",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "ctas",
+      "entry_point": "createStatement",
+      "sql": "CREATE TABLE wrapper_dst AS SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 61,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-ctas",
+        "status": "rejected",
+        "line": 1,
+        "column": 62,
+        "message": "line 1:62: mismatched input ')'. Expecting: <query>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-create_view",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "create_view",
+      "entry_point": "createStatement",
+      "sql": "CREATE VIEW wrapper_view AS SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 61,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-create_view",
+        "status": "rejected",
+        "line": 1,
+        "column": 62,
+        "message": "line 1:62: mismatched input ')'. Expecting: <query>"
+      }
+    },
+    {
+      "id": "CMP-grammar_edges-negative-insert",
+      "family": "grammar_edges",
+      "polarity": "negative",
+      "wrapper": "insert",
+      "entry_point": "createStatement",
+      "sql": "INSERT INTO wrapper_dst SELECT ROW(1) MATCH UNIQUE FULL ()",
+      "expected": {
+        "valid": false,
+        "statement_count": 0,
+        "warnings": [],
+        "error_location": {
+          "offset": 57,
+          "text": ")"
+        }
+      },
+      "oracle": {
+        "id": "CMP-grammar_edges-negative-insert",
+        "status": "rejected",
+        "line": 1,
+        "column": 58,
+        "message": "line 1:58: mismatched input ')'. Expecting: <query>"
+      }
+    }
+  ]
+}

@@ -116,10 +116,40 @@ def _probe(
     }
 
 
+def _probe_mixed(
+    section: str,
+    cases: Iterable[tuple[str, str, bool, dict[str, Any]]],
+) -> dict[str, Any]:
+    results = []
+    for source_id, sql, expected_valid, provenance in cases:
+        outcome = classify_sql(sql)
+        results.append(
+            {
+                "id": stable_case_id(section, sql),
+                "source_id": source_id,
+                "sql": sql,
+                "expected_valid": expected_valid,
+                "provenance": provenance,
+                **outcome,
+            }
+        )
+    states = Counter(case["state"] for case in results)
+    return {
+        "total": len(results),
+        "expected_valid": "per-case",
+        "state_counts": dict(sorted(states.items())),
+        "cases": results,
+    }
+
+
 def _fixture_sections() -> dict[str, dict[str, Any]]:
     inventory = runpy.run_path(str(FIXTURE_INVENTORY))
     positive = inventory["POSITIVE_FIXTURE_STATEMENTS"]
     negative = inventory["INDEPENDENT_INVALID_CASES"]
+    fixtures = inventory["FIXTURES"]
+    fixture_expectations = inventory["FIXTURE_EXPECTATIONS"]
+    diagnostic_warnings = inventory["INVALID_DATAMART_WARNINGS"]
+    split_sql_statements = inventory["split_sql_statements"]
     prepared_cases = [
         (
             f"{filename}::{index}",
@@ -144,6 +174,30 @@ def _fixture_sections() -> dict[str, dict[str, Any]]:
         )
         for filename, index, sql in negative
     ]
+    diagnostic_cases = []
+    for filename, warning_names in diagnostic_warnings.items():
+        relative = f"invalid_datamarts/{filename}"
+        statements = split_sql_statements((fixtures / relative).read_text(encoding="utf-8"))
+        if len(statements) != 1:
+            raise RuntimeError(f"diagnostic fixture must contain one statement: {relative}")
+        diagnostic_cases.append(
+            (
+                relative,
+                statements[0],
+                fixture_expectations[relative].valid,
+                {
+                    "file": relative,
+                    "parser_expected": fixture_expectations[relative].valid,
+                    "validator_expected": (
+                        "valid_with_warnings"
+                        if fixture_expectations[relative].valid
+                        else "syntax_error"
+                    ),
+                    "warning_names": list(warning_names),
+                    "engine_evidence": "not_checked_in_this_tool",
+                },
+            )
+        )
     return {
         "fixture_positive_prepared": _probe(
             "fixture_positive_prepared", prepared_cases, expected_valid=True
@@ -152,6 +206,9 @@ def _fixture_sections() -> dict[str, dict[str, Any]]:
             "fixture_positive_raw", raw_cases, expected_valid=True
         ),
         "fixture_negative": _probe("fixture_negative", negative_cases, expected_valid=False),
+        "fixture_diagnostic_datamarts": _probe_mixed(
+            "fixture_diagnostic_datamarts", diagnostic_cases
+        ),
     }
 
 

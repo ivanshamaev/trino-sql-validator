@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [fmt, clippy, test]
+        check: [fmt, clippy, test, no-python]
         include:
           - check: fmt
             args: fmt --check
@@ -28,6 +28,8 @@ jobs:
             args: clippy --all-targets
           - check: test
             args: test
+          - check: no-python
+            args: check --no-default-features
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

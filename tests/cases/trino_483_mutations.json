@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "source": {
+    "trino_ref": "483",
+    "method": "Deterministic single-token deletion neighbors retained after native parser classification."
+  },
+  "summary": {
+    "total": 6,
+    "accepted": 3,
+    "rejected": 3
+  },
+  "cases": [
+    {
+      "id": "MUT01-remove-as",
+      "base_sql": "SELECT 1 AS x",
+      "removed_token": "AS",
+      "sql": "SELECT 1 x",
+      "expected_valid": true,
+      "oracle": {"status": "accepted"}
+    },
+    {
+      "id": "MUT02-remove-alias",
+      "base_sql": "SELECT 1 AS x",
+      "removed_token": "x",
+      "sql": "SELECT 1 AS",
+      "expected_valid": false,
+      "oracle": {"status": "rejected"}
+    },
+    {
+      "id": "MUT03-remove-all",
+      "base_sql": "SELECT 1 UNION ALL SELECT 2",
+      "removed_token": "ALL",
+      "sql": "SELECT 1 UNION SELECT 2",
+      "expected_valid": true,
+      "oracle": {"status": "accepted"}
+    },
+    {
+      "id": "MUT04-remove-where-expression",
+      "base_sql": "SELECT * FROM t WHERE true",
+      "removed_token": "true",
+      "sql": "SELECT * FROM t WHERE",
+      "expected_valid": false,
+      "oracle": {"status": "rejected"}
+    },
+    {
+      "id": "MUT05-remove-filter",
+      "base_sql": "SELECT * FROM t WHERE true",
+      "removed_token": "WHERE true",
+      "sql": "SELECT * FROM t",
+      "expected_valid": true,
+      "oracle": {"status": "accepted"}
+    },
+    {
+      "id": "MUT06-remove-subscript-close",
+      "base_sql": "SELECT ARRAY[1, 2][*]",
+      "removed_token": "]",
+      "sql": "SELECT ARRAY[1, 2][*",
+      "expected_valid": false,
+      "oracle": {"status": "rejected"}
+    }
+  ]
+}

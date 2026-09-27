@@ -311,11 +311,26 @@ def probe(
     wrapper: Callable[[str], str] = lambda sql: sql,
 ) -> dict[str, Any]:
     mismatches: list[dict[str, Any]] = []
+    case_ids: list[str] = []
     total = 0
     matched = 0
     for example in examples:
         total += 1
         sql = wrapper(example.sql)
+        identity = {
+            "method": example.method,
+            "source_file": example.source_file,
+            "source_line": example.line,
+            "entry_point": example.entry_point,
+            "sql": example.sql,
+            "validated_sql": sql,
+            "expected_valid": expected_valid,
+        }
+        case_ids.append(
+            hashlib.sha256(
+                json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        )
         result = validate(sql)
         if result.valid is expected_valid:
             matched += 1
@@ -333,7 +348,14 @@ def probe(
                 "warnings": warning_data(result),
             }
         )
-    return {"total": total, "matched": matched, "mismatches": mismatches}
+    corpus_sha256 = hashlib.sha256("\n".join(case_ids).encode("ascii")).hexdigest()
+    return {
+        "total": total,
+        "matched": matched,
+        "corpus_sha256": corpus_sha256,
+        "case_ids": case_ids,
+        "mismatches": mismatches,
+    }
 
 
 def file_inventory(files: dict[str, str], contents: dict[str, str]) -> dict[str, Any]:
@@ -368,6 +390,30 @@ def run_audit(trino: UpstreamSource, presto: UpstreamSource) -> dict[str, Any]:
     trino_expressions = extract_call_examples(
         trino_contents["parser"],
         ("expression",),
+        source_file=TRINO_TEST_FILES["parser"],
+        exclude_negative_wrappers=True,
+    )
+    trino_created_statements = extract_call_examples(
+        trino_contents["parser"],
+        ("createStatement",),
+        source_file=TRINO_TEST_FILES["parser"],
+        exclude_negative_wrappers=True,
+    )
+    trino_created_expressions = extract_call_examples(
+        trino_contents["parser"],
+        ("createExpression",),
+        source_file=TRINO_TEST_FILES["parser"],
+        exclude_negative_wrappers=True,
+    )
+    trino_row_patterns = extract_call_examples(
+        trino_contents["parser"],
+        ("rowPattern", "createRowPattern"),
+        source_file=TRINO_TEST_FILES["parser"],
+        exclude_negative_wrappers=True,
+    )
+    trino_paths = extract_call_examples(
+        trino_contents["parser"],
+        ("pathSpecification", "createPathSpecification"),
         source_file=TRINO_TEST_FILES["parser"],
         exclude_negative_wrappers=True,
     )
@@ -426,6 +472,10 @@ def run_audit(trino: UpstreamSource, presto: UpstreamSource) -> dict[str, Any]:
             "extraction": {
                 "positive_statements": extraction_data(trino_statements),
                 "positive_expressions": extraction_data(trino_expressions),
+                "positive_created_statements": extraction_data(trino_created_statements),
+                "positive_created_expressions": extraction_data(trino_created_expressions),
+                "positive_row_patterns": extraction_data(trino_row_patterns),
+                "positive_path_specifications": extraction_data(trino_paths),
                 "positive_types": extraction_data(trino_types),
                 "negative_statements_direct": extraction_data(trino_direct_invalid),
                 "negative_statements_error_suite": extraction_data(trino_error_statements),
@@ -437,6 +487,23 @@ def run_audit(trino: UpstreamSource, presto: UpstreamSource) -> dict[str, Any]:
             "positive_statements": probe(trino_statements.examples, True),
             "positive_expressions": probe(
                 trino_expressions.examples, True, lambda expression: f"SELECT {expression}"
+            ),
+            "positive_created_statements": probe(trino_created_statements.examples, True),
+            "positive_created_expressions": probe(
+                trino_created_expressions.examples,
+                True,
+                lambda expression: f"SELECT {expression}",
+            ),
+            "positive_row_patterns": probe(
+                trino_row_patterns.examples,
+                True,
+                lambda pattern: (
+                    "SELECT * FROM t MATCH_RECOGNIZE "
+                    f"(PATTERN ({pattern}) DEFINE A AS true)"
+                ),
+            ),
+            "positive_path_specifications": probe(
+                trino_paths.examples, True, lambda path: f"SET PATH {path}"
             ),
             "positive_types": probe(
                 trino_types.examples, True, lambda data_type: f"SELECT CAST(NULL AS {data_type})"
@@ -496,7 +563,8 @@ def build_baseline(report: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(result, dict) or "mismatches" not in result:
             continue
         cases[section] = {
-            "minimum_total": result["total"],
+            "total": result["total"],
+            "corpus_sha256": result["corpus_sha256"],
             "allowed_mismatches": sorted(
                 mismatch_id(section, mismatch) for mismatch in result["mismatches"]
             ),
@@ -504,6 +572,7 @@ def build_baseline(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "repository": trino["source"]["repository"],
         "revision": trino["source"]["revision"],
+        "source_content_sha256": trino["source"]["content_sha256"],
         "cases": cases,
     }
 
@@ -515,17 +584,31 @@ def baseline_regressions(report: dict[str, Any], baseline: dict[str, Any]) -> li
         regressions.append("baseline repository does not match the audited Trino repository")
     if baseline.get("revision") != trino["source"]["revision"]:
         regressions.append("baseline revision does not match the resolved Trino revision")
+    expected_source_hashes = baseline.get("source_content_sha256")
+    if expected_source_hashes is not None and expected_source_hashes != trino["source"].get(
+        "content_sha256"
+    ):
+        regressions.append("baseline source hashes do not match the audited Trino sources")
     baseline_cases = baseline.get("cases", {})
     for section, expected in baseline_cases.items():
         result = trino.get(section)
         if not isinstance(result, dict) or "mismatches" not in result:
             regressions.append(f"missing audited section: {section}")
             continue
-        if result["total"] < expected["minimum_total"]:
+        if "total" in expected and result["total"] != expected["total"]:
+            regressions.append(
+                f"{section}: extracted {result['total']} cases, expected exactly "
+                f"{expected['total']}"
+            )
+        elif "minimum_total" in expected and result["total"] < expected["minimum_total"]:
             regressions.append(
                 f"{section}: extracted {result['total']} cases, expected at least "
                 f"{expected['minimum_total']}"
             )
+        if expected.get("corpus_sha256") is not None and result.get("corpus_sha256") != expected.get(
+            "corpus_sha256"
+        ):
+            regressions.append(f"{section}: audited corpus identity changed")
     for section, result in trino.items():
         if not isinstance(result, dict) or "mismatches" not in result:
             continue
@@ -533,6 +616,9 @@ def baseline_regressions(report: dict[str, Any], baseline: dict[str, Any]) -> li
         allowed = set(expected["allowed_mismatches"])
         current = {mismatch_id(section, mismatch) for mismatch in result["mismatches"]}
         regressions.extend(f"new mismatch: {item}" for item in sorted(current - allowed))
+        regressions.extend(
+            f"stale allowed mismatch: {item}" for item in sorted(allowed - current)
+        )
     extraction = trino.get("extraction", {})
     for section, result in extraction.items():
         for malformed in result.get("malformed", []):
