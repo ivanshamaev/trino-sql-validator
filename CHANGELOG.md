@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-27
+
+### Added
+
+- Added source-located argument-count diagnostics for 45 documented,
+  unqualified built-in aggregates. The registry includes overloaded arities
+  such as `min/max: {1, 2}`, `min_by/max_by: {2, 3}`, approximate aggregates,
+  statistical aggregates, map aggregates, and digest aggregates.
+- Added `function_arguments="warn" | "error" | "off"` to `validate()`,
+  `validate_file()`, and `analyze_statements()`. Advisory mode is the default;
+  strict mode returns an invalid result and off mode preserves syntax-only
+  behavior.
+- Added `FunctionArgumentWarning` with the actual and expected argument counts.
+
+### Boundaries
+
+- Preserved valid zero-argument functions, qualified calls, quoted names,
+  wildcard/named forms, and query-scoped inline functions. General overload,
+  type, and column resolution remain outside the focused rule.
+- Disabled argument-count inference when Jinja masking changes the input;
+  rendered SQL remains authoritative.
+
+### Verification
+
+- Added focused Rust and public Python regressions for the reported query,
+  all three modes, nested queries, CTEs, compatibility metadata, inline
+  functions, dialect isolation, source positions, statement indexes, and
+  Jinja masking.
+- Verified 5,188 pytest cases, 90 Rust tests, the no-PyO3 core and fuzz-target
+  builds, both generated catalogs, and the pinned Trino 483 parser audit with
+  no baseline regressions.
+
 ## [0.21.0] - 2026-09-27
 
 ### Fixed

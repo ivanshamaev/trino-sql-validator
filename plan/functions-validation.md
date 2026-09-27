@@ -99,11 +99,26 @@ directly — no serialization dependency needed.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `ruff`,
   `mypy` all stay green.
 
+## v0.22.0 focused argument-count extension
+
+Version 0.22.0 adds a separate, source-located registry for 45 unqualified
+built-in aggregate functions. It includes exact and overloaded argument-count
+sets such as `sum: {1}`, `min/max: {1, 2}`, `min_by/max_by: {2, 3}` and
+`qdigest_agg: {1, 2, 3}`. It runs after a successful parse, including window
+calls, CTEs, and nested queries. The public `function_arguments` option is
+`"warn"` by default, with `"error"` and `"off"` for strict and syntax-only
+behavior. Inline functions, qualified calls, wildcards, named arguments,
+quoted names, and masked Jinja input are excluded to avoid false conclusions
+without name resolution or rendered SQL. `count` supports zero or one ordinary
+expression; its `count(*)` form is deliberately skipped as a wildcard.
+`listagg` remains excluded because its optional separator, overflow behavior,
+and required `WITHIN GROUP` form need dedicated structural handling.
+
 ## Trade-offs / limits (documented, not "fixed" here)
 
 - Catalog is the *documented* function set. Trino deploys may have
   connector/plugin-specific functions beyond docs → possible false positives for
   exotic setups. Warnings are non-fatal and per-dialect-trino, so this is safe.
-- We validate name existence, not arity/type (sqlparser does not model Trino's
-  function signatures beyond parse; arity/type checking is semantic and out of
-  scope for a syntax validator). See roadmap for `trino-parser` on the far end.
+- Apart from the curated aggregate registry, the validator does not resolve
+  overloads, arity, or argument types. Those checks require semantic analysis. See
+  `v0.22.0_function_arguments.md` for the exact boundary.

@@ -18,6 +18,8 @@ from ._native import validate_file as _native_validate_file
 __all__ = [
     "AliasWarning",
     "Error",
+    "FunctionArgumentWarning",
+    "FunctionArgumentsMode",
     "FunctionWarning",
     "JinjaMode",
     "StatementAnalysis",
@@ -30,9 +32,16 @@ __all__ = [
     "validate_file",
 ]
 
-_NativeWarning = tuple[str, str, int | None, int | None]
-"""A single analytical warning from the Rust core: (kind, name, line, column)
-where kind is ``"function"``, ``"type"``, or ``"alias"``."""
+_NativeWarning = tuple[
+    str,
+    str,
+    int | None,
+    int | None,
+    int | None,
+    list[int] | None,
+]
+"""A warning from the Rust core: (kind, name, line, column, actual_count,
+expected_counts)."""
 
 _NativeResult = tuple[
     bool,
@@ -56,6 +65,7 @@ __version__ = _native.__version__
 
 Dialect = str
 JinjaMode = Literal["auto", "mask", "reject"]
+FunctionArgumentsMode = Literal["off", "warn", "error"]
 
 
 def _mask_jinja(sql: str) -> str:
@@ -107,6 +117,13 @@ def _prepare_sql(sql: str, jinja: JinjaMode) -> str:
     if jinja == "reject":
         return sql
     return _mask_jinja(sql)
+
+
+def _validate_function_arguments_mode(mode: FunctionArgumentsMode) -> None:
+    if mode not in ("off", "warn", "error"):
+        raise ValueError(
+            "unknown function_arguments mode; expected 'off', 'warn', or 'error'"
+        )
 
 
 @dataclass(frozen=True)
@@ -162,6 +179,30 @@ class FunctionWarning:
 
 
 @dataclass(frozen=True)
+class FunctionArgumentWarning:
+    """A built-in Trino function called with an unsupported argument count."""
+
+    name: str
+    actual_count: int
+    expected_counts: tuple[int, ...]
+    line: int | None = None
+    column: int | None = None
+
+    def __str__(self) -> str:
+        if self.expected_counts == (1,):
+            expected = "1 argument"
+        else:
+            expected = f"{' or '.join(map(str, self.expected_counts))} arguments"
+        message = (
+            f"Trino built-in function '{self.name}' expects {expected}; "
+            f"got {self.actual_count}"
+        )
+        if self.line is not None and self.column is not None:
+            return f"{message} at line {self.line}, column {self.column}"
+        return message
+
+
+@dataclass(frozen=True)
 class TypeWarning:
     """A use of a data type that is not in the documented Trino catalog.
 
@@ -187,7 +228,18 @@ class ValidationResult:
     valid: bool
     statement_count: int
     error: Error | None = None
-    warnings: tuple[AliasWarning | FunctionWarning | TypeWarning, ...] = ()
+    warnings: tuple[
+        AliasWarning | FunctionArgumentWarning | FunctionWarning | TypeWarning, ...
+    ] = ()
+
+    @property
+    def function_argument_warnings(self) -> list[FunctionArgumentWarning]:
+        """Built-in calls with unsupported argument counts, in source order."""
+        return [
+            warning
+            for warning in self.warnings
+            if isinstance(warning, FunctionArgumentWarning)
+        ]
 
     @property
     def ambiguous_aliases(self) -> list[str]:
@@ -252,12 +304,24 @@ def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
     if dialect.lower() not in _SUPPORTED_DIALECTS:
         raise ValueError(f"unknown dialect {dialect!r}; expected one of {_SUPPORTED_DIALECTS}")
     valid, statement_count, message, line, column, warnings = call
-    converted: list[AliasWarning | FunctionWarning | TypeWarning] = []
-    for kind, name, wl, wc in warnings:
+    converted: list[AliasWarning | FunctionArgumentWarning | FunctionWarning | TypeWarning] = []
+    for kind, name, wl, wc, actual_count, expected_counts in warnings:
         if kind == "alias":
             converted.append(AliasWarning(name=name, line=wl, column=wc))
         elif kind == "function":
             converted.append(FunctionWarning(name=name, line=wl, column=wc))
+        elif kind == "function_arguments":
+            if actual_count is None or expected_counts is None:
+                raise RuntimeError("function argument warning is missing count metadata")
+            converted.append(
+                FunctionArgumentWarning(
+                    name=name,
+                    actual_count=actual_count,
+                    expected_counts=tuple(expected_counts),
+                    line=wl,
+                    column=wc,
+                )
+            )
         elif kind == "type":
             converted.append(TypeWarning(name=name, line=wl, column=wc))
         else:
@@ -271,7 +335,11 @@ def _validate(dialect: Dialect, call: _NativeResult) -> ValidationResult:
 
 
 def validate(
-    sql: str, *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
+    sql: str,
+    *,
+    dialect: Dialect = "trino",
+    jinja: JinjaMode = "auto",
+    function_arguments: FunctionArgumentsMode = "warn",
 ) -> ValidationResult:
     """Validate a SQL string containing one or more statements.
 
@@ -281,21 +349,35 @@ def validate(
     parsing; use ``jinja="reject"`` to parse the original template strictly.
     For the ``trino`` dialect the result also carries advisory warnings for
     ambiguous aliases plus function calls and data types missing from the
-    documented catalog; these never affect ``valid``.
+    documented catalog. ``function_arguments`` controls the curated built-in
+    aggregate argument-count rules: ``"warn"`` is advisory, ``"error"`` makes
+    a mismatch invalid, and ``"off"`` preserves syntax-only behavior.
     """
-    return _validate(dialect, _native_validate(_prepare_sql(sql, jinja), dialect))
+    _validate_function_arguments_mode(function_arguments)
+    prepared = _prepare_sql(sql, jinja)
+    native_mode = "off" if prepared != sql else function_arguments
+    return _validate(dialect, _native_validate(prepared, dialect, native_mode))
 
 
 def analyze_statements(
-    sql: str, *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
+    sql: str,
+    *,
+    dialect: Dialect = "trino",
+    jinja: JinjaMode = "auto",
+    function_arguments: FunctionArgumentsMode = "warn",
 ) -> StatementAnalysis:
     """Validate SQL and return source metadata for each lexical statement.
 
     Statement indexes are zero-based. ``inner_kind`` identifies the wrapped
     statement for ``EXPLAIN`` and ``PREPARE`` when it can be determined.
-    Existing :func:`validate` behavior and result types are unchanged.
+    ``function_arguments`` has the same meaning as in :func:`validate`.
     """
-    native: _NativeStatementAnalysis = _native_analyze_statements(_prepare_sql(sql, jinja), dialect)
+    _validate_function_arguments_mode(function_arguments)
+    prepared = _prepare_sql(sql, jinja)
+    native_mode = "off" if prepared != sql else function_arguments
+    native: _NativeStatementAnalysis = _native_analyze_statements(
+        prepared, dialect, native_mode
+    )
     native_result, native_statements, error_index = native
     return StatementAnalysis(
         validation=_validate(dialect, native_result),
@@ -305,19 +387,33 @@ def analyze_statements(
 
 
 def validate_file(
-    path: str | os.PathLike[str], *, dialect: Dialect = "trino", jinja: JinjaMode = "auto"
+    path: str | os.PathLike[str],
+    *,
+    dialect: Dialect = "trino",
+    jinja: JinjaMode = "auto",
+    function_arguments: FunctionArgumentsMode = "warn",
 ) -> ValidationResult:
     """Validate a UTF-8 SQL file containing one or more statements.
 
     Raises :class:`ValueError` if the file cannot be read (missing file,
     decode failure), the dialect is unknown, or the Jinja mode is invalid.
     Invalid SQL is returned as a :class:`ValidationResult`.
+    ``function_arguments`` has the same meaning as in :func:`validate`.
     """
     _prepare_sql("", jinja)
+    _validate_function_arguments_mode(function_arguments)
     if jinja == "reject":
-        return _validate(dialect, _native_validate_file(os.fspath(path), dialect))
+        return _validate(
+            dialect,
+            _native_validate_file(os.fspath(path), dialect, function_arguments),
+        )
     try:
         with open(path, encoding="utf-8") as sql_file:
-            return validate(sql_file.read(), dialect=dialect, jinja=jinja)
+            return validate(
+                sql_file.read(),
+                dialect=dialect,
+                jinja=jinja,
+                function_arguments=function_arguments,
+            )
     except (OSError, UnicodeError) as error:
         raise ValueError(f"failed to read SQL file {path!r}: {error}") from error

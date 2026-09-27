@@ -1,6 +1,6 @@
 # Trino SQL coverage and validation boundaries
 
-Status: v0.21.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
+Status: v0.22.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
 
 ## Measured coverage
 
@@ -11,7 +11,7 @@ Status: v0.21.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
   29 parser-valid files return exact catalog warnings; the unsupported
   `percentile_cont(...) WITHIN GROUP` form is a located parser error. They are
   intentionally excluded from the positive corpus.
-- The current automated suite collects 5,015 pytest cases and 87 Rust unit tests.
+- The current automated suite collects 5,188 pytest cases and 90 Rust unit tests.
 - `trino_invalid_sql.sql` contributes 236 independent parser-negative cases;
   each is passed to `validate()` separately rather than as multi-statement SQL.
   Trino 483 and v0.21.0 both reject all 236, compared with 201/236 rejections in
@@ -40,13 +40,13 @@ Status: v0.21.0, Trino 483 pin, SQLGlot 30.19.0 comparison pin.
 
 | Component | Pinned identity | Contract |
 | --- | --- | --- |
-| Library/runtime | `trino-sql-validator 0.21.0`; Rust stable; Python ABI3 >= 3.10 | Validation is Rust-native; Java, Maven, ANTLR, SQLGlot, and subprocess parsers are absent from runtime and distributions. |
+| Library/runtime | `trino-sql-validator 0.22.0`; Rust stable; Python ABI3 >= 3.10 | Validation is Rust-native; Java, Maven, ANTLR, SQLGlot, and subprocess parsers are absent from runtime and distributions. |
 | Trino source | release `483`, revision `50b0b50b75abd47f830b7805ee1b51716eb4065e` | Parser cases, grammar, docs catalogs, and the native oracle use the same release pin. |
 | `SqlBase.g4` | `dd7f545bd88187969453cd1544747ffcc0f788d02b38ce1f9da0c5e35638d184` | Inventory covers all 144 parser rules and 708 top-level alternatives; 48 rules are partial, six entry-point-only, and 90 remain explicit backlog. |
 | `SqlParser.java` / `PostProcessor` | `3172e1f7e0df1feb6d4310d819a9fb48bb9b8d86eb969743161b6b759cb2c90c` | Lexer/post-processing parity is tracked separately from grammar text and is only partially covered. |
 | `AstBuilder.java` | `987bd948349f6f951d60ef8aebf8e7281e217194eafff1658646e3653f7cd541` | AST-building behavior is fingerprinted and explicitly marked partial. |
 | Java oracle | `io.trino:trino-parser:483`, JDK 25, protocol schema 2 | The 1,040-case report hashes the Maven descriptor, harness source, compiled classes, classpath file, every JAR, and the Java runtime. Infrastructure failures never become SQL rejections. |
-| Function/type catalogs | Trino revision above; 472 functions and 39 types | `src/functions.manifest.json` and `src/types.manifest.json` pin every documentation input hash. Checks are advisory name existence only. |
+| Function/type catalogs | Trino revision above; 472 functions and 39 types | `src/functions.manifest.json` and `src/types.manifest.json` pin every documentation input hash. Catalog checks are advisory name existence; a separate curated registry checks argument counts for 45 unqualified built-in aggregates. |
 | Parser audit | `plan/trino_483_audit_baseline.json`; exact source hashes per upstream suite | Frozen 484 statement, 238 expression, 68 type, and negative-suite denominators remain distinct from new entry-point sections. |
 | SQLGlot audit | SQLGlot `30.19.0`, same Trino revision and source hashes | Offline comparison only; `Command` fallback is not treated as a full parse. |
 | Intentional compatibility | one leading UTF-8 BOM; two `ALTER MATERIALIZED VIEW ... EXECUTE` forms from newer Trino | These three cases are explicit native-483 rejections accepted by the library; they are not counted as parser fidelity. |
@@ -90,8 +90,9 @@ and their unquoted scalar-call forms are rejected. Quoted function names and
 non-empty grouping-set neighbors remain valid.
 
 These are corpus measurements, not a claim of complete Trino grammar or semantic
-coverage. Connector state, names, overload resolution, arity, types, permissions,
-table schemas, paths, and execution behavior require a coordinator.
+coverage. Apart from the curated aggregate argument-count registry, connector
+state, names, broader overload resolution, argument types, permissions, table
+schemas, paths, and execution behavior require a coordinator.
 
 ## Parser architecture
 

@@ -9,7 +9,10 @@ fuzz_target!(|data: &[u8]| {
         let result = validate_sql_unchecked(sql, &SqlDialect::Trino);
         if result.0 {
             for warning in result.5 {
-                assert!(matches!(warning.0.as_str(), "function" | "type" | "alias"));
+                assert!(matches!(
+                    warning.0.as_str(),
+                    "function" | "function_arguments" | "type" | "alias"
+                ));
             }
         }
     }

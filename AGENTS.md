@@ -180,11 +180,13 @@ semantic analysis and can reject exotic Trino-specific DDL. This is a documented
 accepted limitation (see README + plan/roadmap.md). Do not "fix" by loosening the
 dialect to Generic by default for `dialect="trino"`.
 
-Function validation (`ValidationResult.warnings`) checks only **name existence**
-against the documented Trino catalog (`src/functions.rs`); it does not check
-arity or argument types — that is semantic analysis, out of scope for a syntax
-validator. False positives are possible if a deployed Trino has plugin functions
-beyond the docs; warnings are non-fatal by design.
+Function-name validation (`ValidationResult.warnings`) checks existence against
+the documented Trino catalog (`src/functions.rs`). A separate curated semantic
+registry checks documented argument counts for 45 unqualified built-in
+aggregate functions; it is advisory by default and can be strict or disabled.
+It does not perform general overload resolution or argument type checking.
+False positives are possible if a deployed Trino shadows built-ins with plugin
+functions; qualified calls and inline functions are excluded from the rule.
 
 Before widening or narrowing accepted Trino grammar, review `plan/roadmap.md`,
 the relevant per-version plans, and `plan/sql-coverage.md`; they record deliberate

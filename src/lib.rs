@@ -9,15 +9,16 @@ use sqlparser::ast::{JsonTableColumn, Query, Select, SelectItem, TableAlias, Tab
 use sqlparser::ast::{Visit, Visitor};
 use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-#[cfg(any(feature = "python", test))]
 use std::str::FromStr;
 use std::sync::LazyLock;
 
 use crate::dialects::{parse_trino_sql, SqlDialect};
+use crate::function_arguments::{find_function_argument_issues, FunctionArgumentIssue};
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 pub mod dialects;
+mod function_arguments;
 pub mod functions;
 pub mod types;
 
@@ -25,15 +26,24 @@ pub mod types;
 const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `(valid, statement_count, error_message, error_line, error_column,
-/// warnings)` where each warning is `(kind, name, line, column)` and `kind`
-/// is `"function"`, `"type"`, or `"alias"`.
+/// warnings)` where each warning is `(kind, name, line, column, actual_count,
+/// expected_counts)`.
+pub type ValidationWarningTuple = (
+    String,
+    String,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
+    Option<Vec<usize>>,
+);
+
 pub type ValidationResultTuple = (
     bool,
     usize,
     Option<String>,
     Option<usize>,
     Option<usize>,
-    Vec<(String, String, Option<usize>, Option<usize>)>,
+    Vec<ValidationWarningTuple>,
 );
 
 pub type StatementInfoTuple = (usize, usize, usize, usize, usize, String, Option<String>);
@@ -53,6 +63,50 @@ static LOCATION_SUFFIX_PATTERN: LazyLock<regex::Regex> =
 const MAX_SQL_TOKENS: usize = 65_536;
 const MAX_STATEMENT_TOKENS: usize = 4_096;
 const MAX_NESTING_DEPTH: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FunctionArgumentsMode {
+    Off,
+    Warn,
+    Error,
+}
+
+impl FromStr for FunctionArgumentsMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "warn" => Ok(Self::Warn),
+            "error" => Ok(Self::Error),
+            _ => Err(
+                "unknown function_arguments mode; expected 'off', 'warn', or 'error'".to_string(),
+            ),
+        }
+    }
+}
+
+fn warning(
+    kind: &str,
+    name: String,
+    line: Option<usize>,
+    column: Option<usize>,
+) -> ValidationWarningTuple {
+    (kind.to_string(), name, line, column, None, None)
+}
+
+impl FunctionArgumentIssue {
+    fn warning(self) -> ValidationWarningTuple {
+        (
+            "function_arguments".to_string(),
+            self.name,
+            self.line,
+            self.column,
+            Some(self.actual_count),
+            Some(self.expected_counts),
+        )
+    }
+}
 
 fn complexity_error(message: &str, token: &TokenWithSpan) -> ValidationResultTuple {
     (
@@ -149,7 +203,11 @@ fn empty_from_clause_location(
     })
 }
 
-fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
+fn validate_sql_inner(
+    sql: &str,
+    dialect: &SqlDialect,
+    function_arguments: FunctionArgumentsMode,
+) -> ValidationResultTuple {
     let sql = sql.strip_prefix('\u{feff}').unwrap_or(sql);
     let parser = dialect.parser();
     if let Some(result) = validate_input_complexity(sql, parser.as_ref()) {
@@ -191,6 +249,7 @@ fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple 
             source_type_names,
         )) => {
             debug_assert!(custom_statement_kinds.len() <= statements.len());
+            let mut function_argument_issues = Vec::new();
             let mut warnings = if *dialect == SqlDialect::Trino {
                 let mut warning_statements = statements.clone();
                 warning_statements.extend(
@@ -212,22 +271,70 @@ fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple 
                         &local_function_names,
                     ));
                     warnings.extend(find_unknown_functions(&declarations, &local_function_names));
+                    if function_arguments != FunctionArgumentsMode::Off {
+                        function_argument_issues.extend(find_function_argument_issues(
+                            std::slice::from_ref(statement),
+                            &local_function_names,
+                        ));
+                        function_argument_issues.extend(find_function_argument_issues(
+                            &declarations,
+                            &local_function_names,
+                        ));
+                    }
                 }
                 warnings.extend(find_unknown_functions(
                     &compatibility_metadata,
                     &HashSet::new(),
                 ));
+                if function_arguments != FunctionArgumentsMode::Off {
+                    let metadata_local_names = inline_function_names(
+                        &inline_functions
+                            .iter()
+                            .map(|(_, statement)| statement.clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    function_argument_issues.extend(find_function_argument_issues(
+                        &compatibility_metadata,
+                        &metadata_local_names,
+                    ));
+                }
                 find_unknown_types(&warning_statements, &mut warnings);
                 for ident in source_type_names {
                     let name = ident.value.to_ascii_lowercase();
                     let (line, column) = span_position(&ident);
-                    warnings.push(("type".to_string(), name, line, column));
+                    warnings.push(warning("type", name, line, column));
                 }
                 warnings.extend(find_ambiguous_aliases(&warning_statements));
                 warnings
             } else {
                 Vec::new()
             };
+            function_argument_issues.sort_by_key(|issue| {
+                (
+                    issue.line.unwrap_or(usize::MAX),
+                    issue.column.unwrap_or(usize::MAX),
+                )
+            });
+            function_argument_issues.dedup();
+            if function_arguments == FunctionArgumentsMode::Error {
+                if let Some(issue) = function_argument_issues.first() {
+                    return (
+                        false,
+                        0,
+                        Some(format!("function argument error: {}", issue.message())),
+                        issue.line,
+                        issue.column,
+                        Vec::new(),
+                    );
+                }
+            }
+            if function_arguments == FunctionArgumentsMode::Warn {
+                warnings.extend(
+                    function_argument_issues
+                        .into_iter()
+                        .map(FunctionArgumentIssue::warning),
+                );
+            }
             warnings.sort_by_key(|w| (w.2.unwrap_or(usize::MAX), w.3.unwrap_or(usize::MAX)));
             warnings.dedup();
             (true, statements.len(), None, None, None, warnings)
@@ -240,7 +347,18 @@ fn validate_sql_inner(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple 
 }
 
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
-    catch_unwind(AssertUnwindSafe(|| validate_sql_inner(sql, dialect))).unwrap_or_else(|_| {
+    validate_sql_with_options(sql, dialect, FunctionArgumentsMode::Warn)
+}
+
+pub fn validate_sql_with_options(
+    sql: &str,
+    dialect: &SqlDialect,
+    function_arguments: FunctionArgumentsMode,
+) -> ValidationResultTuple {
+    catch_unwind(AssertUnwindSafe(|| {
+        validate_sql_inner(sql, dialect, function_arguments)
+    }))
+    .unwrap_or_else(|_| {
         (
             false,
             0,
@@ -253,7 +371,7 @@ pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTup
 }
 
 pub fn validate_sql_unchecked(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
-    validate_sql_inner(sql, dialect)
+    validate_sql_inner(sql, dialect, FunctionArgumentsMode::Warn)
 }
 
 /// Walk every expression in the parsed statements and collect function calls
@@ -261,7 +379,7 @@ pub fn validate_sql_unchecked(sql: &str, dialect: &SqlDialect) -> ValidationResu
 fn find_unknown_functions(
     statements: &[Statement],
     local_function_names: &HashSet<String>,
-) -> Vec<(String, String, Option<usize>, Option<usize>)> {
+) -> Vec<ValidationWarningTuple> {
     let mut unknown = Vec::new();
     let owned_statements = statements.to_vec();
     let _ = visit_expressions(&owned_statements, |expr| {
@@ -272,7 +390,7 @@ fn find_unknown_functions(
                     func.name.0.len() == 1 && local_function_names.contains(&name);
                 if !is_unqualified_local && !is_known_trino_function(&name) {
                     let (line, column) = span_position(ident);
-                    unknown.push(("function".to_string(), name, line, column));
+                    unknown.push(warning("function", name, line, column));
                 }
             }
         }
@@ -314,10 +432,7 @@ fn is_known_trino_function(name: &str) -> bool {
         )
 }
 
-fn collect_ambiguous_alias(
-    ident: &Ident,
-    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
-) {
+fn collect_ambiguous_alias(ident: &Ident, warnings: &mut Vec<ValidationWarningTuple>) {
     let name = ident.value.to_ascii_lowercase();
     if ident.quote_style.is_none()
         && matches!(
@@ -326,25 +441,20 @@ fn collect_ambiguous_alias(
         )
     {
         let (line, column) = span_position(ident);
-        warnings.push(("alias".to_string(), name, line, column));
+        warnings.push(warning("alias", name, line, column));
     }
 }
 
-fn collect_table_alias(
-    alias: &TableAlias,
-    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
-) {
+fn collect_table_alias(alias: &TableAlias, warnings: &mut Vec<ValidationWarningTuple>) {
     collect_ambiguous_alias(&alias.name, warnings);
     for column in &alias.columns {
         collect_ambiguous_alias(&column.name, warnings);
     }
 }
 
-fn find_ambiguous_aliases(
-    statements: &[Statement],
-) -> Vec<(String, String, Option<usize>, Option<usize>)> {
+fn find_ambiguous_aliases(statements: &[Statement]) -> Vec<ValidationWarningTuple> {
     struct AliasVisitor {
-        warnings: Vec<(String, String, Option<usize>, Option<usize>)>,
+        warnings: Vec<ValidationWarningTuple>,
     }
 
     impl Visitor for AliasVisitor {
@@ -419,12 +529,9 @@ fn find_ambiguous_aliases(
 /// the expression walker; statement-level type declarations (table columns,
 /// view columns, `ALTER TABLE` column operations, function return types) are
 /// visited directly.
-fn find_unknown_types(
-    statements: &[Statement],
-    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
-) {
+fn find_unknown_types(statements: &[Statement], warnings: &mut Vec<ValidationWarningTuple>) {
     struct TypeVisitor<'a> {
-        warnings: &'a mut Vec<(String, String, Option<usize>, Option<usize>)>,
+        warnings: &'a mut Vec<ValidationWarningTuple>,
     }
 
     impl Visitor for TypeVisitor<'_> {
@@ -550,7 +657,7 @@ fn find_unknown_types(
 
 fn collect_json_table_types(
     columns: &[JsonTableColumn],
-    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
+    warnings: &mut Vec<ValidationWarningTuple>,
 ) {
     for column in columns {
         match column {
@@ -561,10 +668,7 @@ fn collect_json_table_types(
     }
 }
 
-fn collect_type_entries(
-    data_type: &DataType,
-    warnings: &mut Vec<(String, String, Option<usize>, Option<usize>)>,
-) {
+fn collect_type_entries(data_type: &DataType, warnings: &mut Vec<ValidationWarningTuple>) {
     match data_type {
         DataType::Array(elem_type) => match elem_type {
             ArrayElemTypeDef::AngleBracket(inner)
@@ -590,7 +694,7 @@ fn collect_type_entries(
             let type_name = ident.value.to_ascii_lowercase();
             if !types::is_known_type(&type_name) {
                 let (line, column) = span_position(ident);
-                warnings.push(("type".to_string(), type_name, line, column));
+                warnings.push(warning("type", type_name, line, column));
             }
         }
         _ => {}
@@ -804,17 +908,18 @@ fn error_statement_index(
 /// Returns `(valid, statement_count, error_message, error_line, error_column,
 /// warnings)`. For the `trino` dialect, `warnings` reports calls to functions
 /// and uses of data types that are not in the documented Trino catalog (each
-/// entry is `(kind, name, line, column)` where `kind` is `"function"` or
-/// `"type"`).
+/// entry is `(kind, name, line, column, actual_count, expected_counts)`).
 ///
 /// Invalid SQL is reported as a tuple value — this function never raises for
 /// bad syntax. Only real programming errors (e.g. unknown dialect) raise.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (sql, dialect = "trino"))]
-fn validate(sql: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
+#[pyo3(signature = (sql, dialect = "trino", function_arguments = "warn"))]
+fn validate(sql: &str, dialect: &str, function_arguments: &str) -> PyResult<ValidationResultTuple> {
     let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
-    Ok(validate_sql_impl(sql, &parsed_dialect))
+    let mode =
+        FunctionArgumentsMode::from_str(function_arguments).map_err(PyValueError::new_err)?;
+    Ok(validate_sql_with_options(sql, &parsed_dialect, mode))
 }
 
 /// Validate a UTF-8 file containing one or more statements.
@@ -823,26 +928,46 @@ fn validate(sql: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
 /// decode failure) raise an exception.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, dialect = "trino"))]
-fn validate_file(path: &str, dialect: &str) -> PyResult<ValidationResultTuple> {
+#[pyo3(signature = (path, dialect = "trino", function_arguments = "warn"))]
+fn validate_file(
+    path: &str,
+    dialect: &str,
+    function_arguments: &str,
+) -> PyResult<ValidationResultTuple> {
     let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
+    let mode =
+        FunctionArgumentsMode::from_str(function_arguments).map_err(PyValueError::new_err)?;
     let contents = std::fs::read_to_string(path).map_err(|err| {
         PyValueError::new_err(format!("failed to read SQL file '{}': {}", path, err))
     })?;
-    Ok(validate_sql_impl(&contents, &parsed_dialect))
+    Ok(validate_sql_with_options(&contents, &parsed_dialect, mode))
 }
 
 /// Validate SQL and return opt-in source metadata for each statement.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (sql, dialect = "trino"))]
-fn analyze_statements(sql: &str, dialect: &str) -> PyResult<StatementAnalysisTuple> {
+#[pyo3(signature = (sql, dialect = "trino", function_arguments = "warn"))]
+fn analyze_statements(
+    sql: &str,
+    dialect: &str,
+    function_arguments: &str,
+) -> PyResult<StatementAnalysisTuple> {
     let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
-    Ok(analyze_sql_impl(sql, &parsed_dialect))
+    let mode =
+        FunctionArgumentsMode::from_str(function_arguments).map_err(PyValueError::new_err)?;
+    Ok(analyze_sql_with_options(sql, &parsed_dialect, mode))
 }
 
 pub fn analyze_sql_impl(sql: &str, dialect: &SqlDialect) -> StatementAnalysisTuple {
-    let validation = validate_sql_impl(sql, dialect);
+    analyze_sql_with_options(sql, dialect, FunctionArgumentsMode::Warn)
+}
+
+pub fn analyze_sql_with_options(
+    sql: &str,
+    dialect: &SqlDialect,
+    function_arguments: FunctionArgumentsMode,
+) -> StatementAnalysisTuple {
+    let validation = validate_sql_with_options(sql, dialect, function_arguments);
     let statements = statement_info(sql, dialect);
     let error_index = error_statement_index(&validation, &statements);
     (validation, statements, error_index)

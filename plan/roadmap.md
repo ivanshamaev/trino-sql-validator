@@ -181,6 +181,20 @@ Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
 
 See [`v0.21.0_double_colon_cast.md`](v0.21.0_double_colon_cast.md).
 
+## v0.22.0 — focused function-argument diagnostics
+
+- Added a bounded, source-located argument-count registry for 45 documented
+  built-in aggregates, including overloaded `min`, `max`, `min_by`, and
+  `max_by`, across window calls, CTEs, and nested queries.
+- Added advisory diagnostics by default, an explicit strict mode, and a
+  syntax-only option while distinguishing parser from analyzer evidence.
+- Preserved valid zero-argument functions and scoped inline-function exemptions.
+  Column resolution, argument types, and complete overload validation remain
+  outside this change.
+
+See
+[`v0.22.0_function_arguments.md`](v0.22.0_function_arguments.md).
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.
