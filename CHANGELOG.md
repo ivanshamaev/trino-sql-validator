@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-09-27
+
+### Fixed
+
+- Rejected PostgreSQL-style `expression::type` casts in the Trino dialect,
+  including dereferences, literals, parenthesized expressions, arrays, and
+  chained forms that the delegated Generic grammar previously accepted.
+- Preserved Trino static method calls with the exact
+  `qualifiedName::methodName(...)` prefix, including qualified and quoted
+  names, keyword method names, comments, function warnings, and their original
+  source positions.
+- Located invalid `::` operators at their original line and column without
+  changing Generic or Hive behavior.
+
+### Verification
+
+- Added focused Rust and public Python regressions for the reported multiline
+  query, LF/CRLF positions, malformed neighbors, valid static method calls,
+  warning positions, and dialect isolation.
+- Verified the 15-case focused corpus against `io.trino:trino-parser:483` on
+  Temurin JRE 25.0.4.1 with zero expected-label mismatches. The full suite now
+  collects 5,015 pytest cases and runs 87 Rust unit tests.
+
 ## [0.20.0] - 2026-09-27
 
 ### Added

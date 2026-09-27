@@ -5236,27 +5236,60 @@ fn is_method_receiver_end(token: &TokenWithSpan) -> bool {
     )
 }
 
-fn normalize_method_calls(tokens: &mut Vec<TokenWithSpan>) {
+fn is_qualified_name_ending_at(tokens: &[TokenWithSpan], end: usize) -> bool {
+    if !is_identifier(&tokens[end]) {
+        return false;
+    }
+    let mut part = end;
+    while let Some(separator) = previous_significant(tokens, part) {
+        if tokens[separator].token != Token::Period {
+            return true;
+        }
+        let Some(previous_part) = previous_significant(tokens, separator) else {
+            return false;
+        };
+        if !is_identifier(&tokens[previous_part]) {
+            return false;
+        }
+        part = previous_part;
+    }
+    true
+}
+
+fn normalize_method_calls(tokens: &mut Vec<TokenWithSpan>) -> Result<(), ParserError> {
     for separator in (0..tokens.len()).rev() {
         if tokens[separator].token == Token::DoubleColon {
             let Some(receiver) = previous_significant(tokens, separator) else {
-                continue;
+                return Err(syntax_error(
+                    &tokens[separator],
+                    "Trino '::' is only valid in a static method call",
+                ));
             };
             let Some(method) = next_significant(tokens, separator + 1, tokens.len()) else {
-                continue;
+                return Err(syntax_error(
+                    &tokens[separator],
+                    "Trino '::' is only valid in a static method call",
+                ));
             };
             let Some(open) = next_significant(tokens, method + 1, tokens.len()) else {
-                continue;
+                return Err(syntax_error(
+                    &tokens[separator],
+                    "Trino '::' is only valid in a static method call",
+                ));
             };
-            if is_identifier(&tokens[receiver])
-                && is_identifier(&tokens[method])
-                && tokens[open].token == Token::LParen
+            if !is_qualified_name_ending_at(tokens, receiver)
+                || !is_identifier(&tokens[method])
+                || tokens[open].token != Token::LParen
             {
-                tokens[separator].token = Token::Period;
-                if let Token::Word(word) = &mut tokens[method].token {
-                    word.quote_style = Some('"');
-                    word.keyword = Keyword::NoKeyword;
-                }
+                return Err(syntax_error(
+                    &tokens[separator],
+                    "Trino '::' is only valid in a static method call",
+                ));
+            }
+            tokens[separator].token = Token::Period;
+            if let Token::Word(word) = &mut tokens[method].token {
+                word.quote_style = Some('"');
+                word.keyword = Keyword::NoKeyword;
             }
             continue;
         }
@@ -5287,6 +5320,7 @@ fn normalize_method_calls(tokens: &mut Vec<TokenWithSpan>) {
             }
         }
     }
+    Ok(())
 }
 
 fn normalize_pattern_processing_modes(tokens: &mut [TokenWithSpan]) {
@@ -7742,7 +7776,7 @@ pub(crate) fn parse_sql(dialect: &dyn Dialect, sql: &str) -> Result<ParsedSql, P
     normalize_between_symmetry(&mut tokens);
     normalize_trim_without_character(&mut tokens);
     normalize_empty_lambdas(&mut tokens);
-    normalize_method_calls(&mut tokens);
+    normalize_method_calls(&mut tokens)?;
     normalize_pattern_processing_modes(&mut tokens);
     normalize_open_pattern_quantifiers(&mut tokens);
     normalize_row_pattern_anchors(&mut tokens);
@@ -7838,6 +7872,37 @@ mod tests {
         normalize_values_expression(&mut tokens, Some("map_from_entries"));
 
         assert_eq!(tokens, original);
+    }
+
+    #[test]
+    fn double_colon_is_limited_to_static_method_calls() {
+        let dialect = TrinoDialect {};
+
+        for sql in [
+            "SELECT t.date::date FROM dwh.table_name t",
+            "SELECT x::bigint",
+            "SELECT '2024-01-01'::date",
+            "SELECT (x)::bigint",
+            "SELECT x::bigint[]",
+            "SELECT x::",
+            "SELECT x::a::b()",
+            "SELECT foo().bar::baz()",
+            "SELECT a[1].bar::baz()",
+            "SELECT (a).bar::baz()",
+        ] {
+            assert!(parse_sql(&dialect, sql).is_err(), "{sql}");
+        }
+
+        for sql in [
+            "SELECT bigint::parse(value => '42')",
+            "SELECT catalog.schema.bigint::parse('42')",
+            "SELECT \"bigint\"::\"parse\"('42')",
+            "SELECT bigint::select(value => 1)",
+            "SELECT x::decimal(10, 2)",
+            "SELECT bigint /* receiver */ :: /* method */ parse('42')",
+        ] {
+            assert!(parse_sql(&dialect, sql).is_ok(), "{sql}");
+        }
     }
 
     #[test]

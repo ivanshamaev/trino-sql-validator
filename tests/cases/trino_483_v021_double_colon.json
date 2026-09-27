@@ -1,0 +1,110 @@
+{
+  "schema_version": 2,
+  "cases": [
+    {
+      "id": "V021-N01",
+      "entry_point": "createStatement",
+      "sql": "SELECT\n   t.date::date\nfrom dwh.table_name t",
+      "expected_status": "rejected",
+      "source": "v0.21.0 user regression"
+    },
+    {
+      "id": "V021-N02",
+      "entry_point": "createStatement",
+      "sql": "SELECT x::bigint",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N03",
+      "entry_point": "createStatement",
+      "sql": "SELECT '2024-01-01'::date",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N04",
+      "entry_point": "createStatement",
+      "sql": "SELECT (x)::bigint",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N05",
+      "entry_point": "createStatement",
+      "sql": "SELECT x::bigint[]",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N06",
+      "entry_point": "createStatement",
+      "sql": "SELECT x::a::b()",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N07",
+      "entry_point": "createStatement",
+      "sql": "SELECT foo().bar::baz()",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N08",
+      "entry_point": "createStatement",
+      "sql": "SELECT a[1].bar::baz()",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-N09",
+      "entry_point": "createStatement",
+      "sql": "SELECT (a).bar::baz()",
+      "expected_status": "rejected",
+      "source": "v0.21.0 double-colon boundary"
+    },
+    {
+      "id": "V021-P01",
+      "entry_point": "createStatement",
+      "sql": "SELECT bigint::parse(value => '42')",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    },
+    {
+      "id": "V021-P02",
+      "entry_point": "createStatement",
+      "sql": "SELECT catalog.schema.bigint::parse('42')",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    },
+    {
+      "id": "V021-P03",
+      "entry_point": "createStatement",
+      "sql": "SELECT \"bigint\"::\"parse\"('42')",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    },
+    {
+      "id": "V021-P04",
+      "entry_point": "createStatement",
+      "sql": "SELECT bigint::select(value => 1)",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    },
+    {
+      "id": "V021-P05",
+      "entry_point": "createStatement",
+      "sql": "SELECT x::decimal(10, 2)",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    },
+    {
+      "id": "V021-P06",
+      "entry_point": "createStatement",
+      "sql": "SELECT bigint /* receiver */ :: /* method */ parse('42')",
+      "expected_status": "accepted",
+      "source": "v0.21.0 static-method control"
+    }
+  ]
+}

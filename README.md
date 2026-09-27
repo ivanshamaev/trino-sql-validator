@@ -217,7 +217,7 @@ warnings. SQLGlot provides a rich AST and is a better fit for formatting,
 rewriting, lineage, and translation between SQL dialects, but its parser is
 deliberately permissive and is not a strict Trino validity oracle.
 
-The reproducible audit below compares `trino-sql-validator 0.20.0` with
+The reproducible audit below compares `trino-sql-validator 0.21.0` with
 SQLGlot 30.19.0 against project fixtures and parser cases extracted from Trino
 483. “SQLGlot accepted” includes its `Command` fallback, which preserves an
 unsupported statement as text without fully parsing it. “Full AST” excludes

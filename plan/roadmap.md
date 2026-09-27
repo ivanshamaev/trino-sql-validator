@@ -169,6 +169,18 @@ Jinja/dbt evolution is intentionally separate in `plan/jinja_dbt_plan_dev.md`.
 - Verified 4,994 pytest cases, 86 Rust unit tests, and local libFuzzer smoke for
   all three targets. Batch/GIL changes and performance profiling remain deferred.
 
+## v0.21.0 — strict `::` expression boundary
+
+- Rejected PostgreSQL-style `expression::type` false accepts in the Trino path.
+- Preserved Trino static method calls with the exact
+  `qualifiedName::methodName(...)` grammar, including keyword method names and
+  existing warning locations.
+- Kept Generic/Hive behavior unchanged and reported the invalid `::` at its
+  original source location.
+- Added a 15-case Trino 483 oracle corpus with zero expected-label mismatches.
+
+See [`v0.21.0_double_colon_cast.md`](v0.21.0_double_colon_cast.md).
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.
