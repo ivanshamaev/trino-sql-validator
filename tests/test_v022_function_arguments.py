@@ -67,7 +67,7 @@ DOCUMENTED_AGGREGATE_ARITIES = {
 
 
 def test_sum_without_argument_from_user_reproduction_warns() -> None:
-    result = validate(USER_REPRODUCTION)
+    result = validate(USER_REPRODUCTION, function_arguments="warn")
 
     assert result.valid is True
     assert result.statement_count == 1
@@ -90,7 +90,9 @@ def test_sum_without_argument_can_be_a_strict_error() -> None:
         "function argument error: Trino built-in function 'sum' expects 1 argument; got 0"
     )
     assert (result.error.line, result.error.column) == (1, 18)
-    assert result.warnings == ()
+    assert result.warnings == (
+        FunctionArgumentWarning("sum", 0, (1,), line=1, column=18),
+    )
 
 
 @pytest.mark.parametrize(
@@ -106,7 +108,7 @@ def test_documented_aggregate_rejects_zero_arguments(
 ) -> None:
     result = validate(f"SELECT {name}()")
 
-    assert result.valid is True
+    assert result.valid is False
     assert result.function_argument_warnings == [
         FunctionArgumentWarning(
             name,
@@ -146,7 +148,7 @@ def test_documented_aggregate_rejects_too_many_arguments(
     arguments = ", ".join(str(index) for index in range(1, argument_count + 1))
     result = validate(f"SELECT {name}({arguments})")
 
-    assert result.valid is True, result.error
+    assert result.valid is False
     assert result.function_argument_warnings == [
         FunctionArgumentWarning(
             name,
@@ -182,7 +184,7 @@ def test_sum_argument_counts_are_checked_in_nested_queries(
 ) -> None:
     result = validate(sql)
 
-    assert result.valid is True
+    assert result.valid is False
     assert len(result.function_argument_warnings) == 1
     assert result.function_argument_warnings[0].actual_count == actual_count
 

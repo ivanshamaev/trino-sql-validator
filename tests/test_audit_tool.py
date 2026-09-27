@@ -56,6 +56,18 @@ def test_standalone_function_specification_has_an_executable_wrapper() -> None:
     assert result["mismatches"] == []
 
 
+def test_parser_probe_does_not_treat_arity_as_a_syntax_error() -> None:
+    extraction = audit.extract_call_examples(
+        'void testAggregate() { statement("SELECT sum()"); }', ("statement",)
+    )
+
+    result = audit.probe(extraction.examples, True)
+
+    assert not audit.validate("SELECT sum()").valid
+    assert result["matched"] == 1
+    assert result["mismatches"] == []
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         [

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-09-27
+
+### Changed
+
+- Defaulted `validate()`, `validate_file()`, and `analyze_statements()` to strict
+  aggregate argument-count checking. Ordinary calls now return `valid=False`
+  for cases such as `sum()` and `min()`, with the first violation in `error`.
+- Retained all collected diagnostics in `warnings` on argument-count errors,
+  including every `FunctionArgumentWarning` and existing function/type/alias
+  warnings. Invalid-result representations now show the warning count.
+- Kept explicit `function_arguments="warn"` and `"off"` for compatibility.
+  Invalid results retain `statement_count=0`; parser errors still return no
+  partial warnings. Catalog and alias warnings alone remain non-fatal.
+- Made upstream parser audits explicitly syntax-only and extended fuzz warning
+  checks to invalid results carrying diagnostics.
+
+### Verification
+
+- Verified 5,201 pytest cases against a fresh native build, 91 Rust tests,
+  fmt, clippy, Ruff, mypy, the no-PyO3 core, fuzz compilation, and the pinned
+  Trino 483 parser audit without baseline regressions.
+
 ## [0.22.0] - 2026-09-27
 
 ### Added

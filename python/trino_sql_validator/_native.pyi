@@ -17,15 +17,15 @@ _StatementInfo: TypeAlias = tuple[int, int, int, int, int, str, str | None]
 def validate(
     sql: str,
     dialect: str = "trino",
-    function_arguments: str = "warn",
+    function_arguments: str = "error",
 ) -> _Validation: ...
 def validate_file(
     path: str,
     dialect: str = "trino",
-    function_arguments: str = "warn",
+    function_arguments: str = "error",
 ) -> _Validation: ...
 def analyze_statements(
     sql: str,
     dialect: str = "trino",
-    function_arguments: str = "warn",
+    function_arguments: str = "error",
 ) -> tuple[_Validation, tuple[_StatementInfo, ...], int | None]: ...

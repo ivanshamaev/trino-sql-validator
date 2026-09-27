@@ -95,7 +95,7 @@ directly — no serialization dependency needed.
 - `cargo test` (Rust unit tests for the walker + catalog sanity).
 - `pytest` — unknown function → warning with correct line/column; known &
   multi-argument & qualified calls → no warning; `dialect="generic"` → no
-  function checks; invalid SQL → parse error, no warnings.
+  function checks; syntactically invalid SQL → parse error, no warnings.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `ruff`,
   `mypy` all stay green.
 
@@ -106,13 +106,24 @@ built-in aggregate functions. It includes exact and overloaded argument-count
 sets such as `sum: {1}`, `min/max: {1, 2}`, `min_by/max_by: {2, 3}` and
 `qdigest_agg: {1, 2, 3}`. It runs after a successful parse, including window
 calls, CTEs, and nested queries. The public `function_arguments` option is
-`"warn"` by default, with `"error"` and `"off"` for strict and syntax-only
+`"warn"` by default in 0.22.0, with `"error"` and `"off"` for strict and syntax-only
 behavior. Inline functions, qualified calls, wildcards, named arguments,
 quoted names, and masked Jinja input are excluded to avoid false conclusions
 without name resolution or rendered SQL. `count` supports zero or one ordinary
 expression; its `count(*)` form is deliberately skipped as a wildcard.
 `listagg` remains excluded because its optional separator, overflow behavior,
 and required `WITHIN GROUP` form need dedicated structural handling.
+
+## v0.23.0 unified default result
+
+Ordinary `validate(sql)` now uses `"error"`: unsupported argument counts make
+`valid=False`, while all diagnostics remain in `warnings`. The first arity
+error is also available through `error`. Catalog and alias warnings remain
+advisory, including when returned alongside an arity error. Parser failures
+still have empty warnings; invalid results retain `statement_count=0`.
+Explicit `"warn"` and `"off"` remain compatible options. The three public APIs,
+native bindings, and Rust default entry points follow the same policy.
+See [`v0.23.0_unified_validation.md`](v0.23.0_unified_validation.md).
 
 ## Trade-offs / limits (documented, not "fixed" here)
 

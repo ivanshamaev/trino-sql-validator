@@ -128,7 +128,7 @@ def _validate_function_arguments_mode(mode: FunctionArgumentsMode) -> None:
 
 @dataclass(frozen=True)
 class Error:
-    """A single parse error found during validation."""
+    """The first parser or function argument-count error found during validation."""
 
     message: str
     line: int | None = None
@@ -180,7 +180,7 @@ class FunctionWarning:
 
 @dataclass(frozen=True)
 class FunctionArgumentWarning:
-    """A built-in Trino function called with an unsupported argument count."""
+    """An argument-count diagnostic, retained even when it makes SQL invalid."""
 
     name: str
     actual_count: int
@@ -263,6 +263,11 @@ class ValidationResult:
 
     def __repr__(self) -> str:
         if not self.valid:
+            if self.warnings:
+                return (
+                    f"<ValidationResult valid=False error={self.error!r} "
+                    f"warnings={len(self.warnings)}>"
+                )
             return f"<ValidationResult valid=False error={self.error!r}>"
         if self.warnings:
             return (
@@ -339,7 +344,7 @@ def validate(
     *,
     dialect: Dialect = "trino",
     jinja: JinjaMode = "auto",
-    function_arguments: FunctionArgumentsMode = "warn",
+    function_arguments: FunctionArgumentsMode = "error",
 ) -> ValidationResult:
     """Validate a SQL string containing one or more statements.
 
@@ -350,8 +355,9 @@ def validate(
     For the ``trino`` dialect the result also carries advisory warnings for
     ambiguous aliases plus function calls and data types missing from the
     documented catalog. ``function_arguments`` controls the curated built-in
-    aggregate argument-count rules: ``"warn"`` is advisory, ``"error"`` makes
-    a mismatch invalid, and ``"off"`` preserves syntax-only behavior.
+    aggregate argument-count rules: ``"error"`` (the default) makes a mismatch
+    invalid while retaining all diagnostics in ``warnings``. ``"warn"`` is
+    advisory and ``"off"`` disables only argument-count checking.
     """
     _validate_function_arguments_mode(function_arguments)
     prepared = _prepare_sql(sql, jinja)
@@ -364,7 +370,7 @@ def analyze_statements(
     *,
     dialect: Dialect = "trino",
     jinja: JinjaMode = "auto",
-    function_arguments: FunctionArgumentsMode = "warn",
+    function_arguments: FunctionArgumentsMode = "error",
 ) -> StatementAnalysis:
     """Validate SQL and return source metadata for each lexical statement.
 
@@ -391,7 +397,7 @@ def validate_file(
     *,
     dialect: Dialect = "trino",
     jinja: JinjaMode = "auto",
-    function_arguments: FunctionArgumentsMode = "warn",
+    function_arguments: FunctionArgumentsMode = "error",
 ) -> ValidationResult:
     """Validate a UTF-8 SQL file containing one or more statements.
 

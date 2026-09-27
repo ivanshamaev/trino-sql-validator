@@ -195,6 +195,17 @@ See [`v0.21.0_double_colon_cast.md`](v0.21.0_double_colon_cast.md).
 See
 [`v0.22.0_function_arguments.md`](v0.22.0_function_arguments.md).
 
+## v0.23.0 — unified validation by default
+
+- Ordinary `validate(sql)` rejects unsupported aggregate argument counts and
+  returns every collected diagnostic, including on an invalid result.
+- The first argument-count error remains in `error`; the full list remains in
+  `function_argument_warnings`, alongside catalog and alias diagnostics.
+- Existing explicit `warn`/`off` options remain available. Parser audits use
+  `off` explicitly to keep their measurements about syntax.
+
+See [`v0.23.0_unified_validation.md`](v0.23.0_unified_validation.md).
+
 ## Next
 - Define any policy API such as `allow_ddl=False` separately from syntax validity;
   it must account for DML, CALL, ALTER EXECUTE, and transaction/session statements.

@@ -316,19 +316,17 @@ fn validate_sql_inner(
                 )
             });
             function_argument_issues.dedup();
-            if function_arguments == FunctionArgumentsMode::Error {
-                if let Some(issue) = function_argument_issues.first() {
-                    return (
-                        false,
-                        0,
-                        Some(format!("function argument error: {}", issue.message())),
+            let argument_error = (function_arguments == FunctionArgumentsMode::Error)
+                .then(|| function_argument_issues.first())
+                .flatten()
+                .map(|issue| {
+                    (
+                        format!("function argument error: {}", issue.message()),
                         issue.line,
                         issue.column,
-                        Vec::new(),
-                    );
-                }
-            }
-            if function_arguments == FunctionArgumentsMode::Warn {
+                    )
+                });
+            if function_arguments != FunctionArgumentsMode::Off {
                 warnings.extend(
                     function_argument_issues
                         .into_iter()
@@ -337,7 +335,11 @@ fn validate_sql_inner(
             }
             warnings.sort_by_key(|w| (w.2.unwrap_or(usize::MAX), w.3.unwrap_or(usize::MAX)));
             warnings.dedup();
-            (true, statements.len(), None, None, None, warnings)
+            if let Some((message, line, column)) = argument_error {
+                (false, 0, Some(message), line, column, warnings)
+            } else {
+                (true, statements.len(), None, None, None, warnings)
+            }
         }
         Err(err) => {
             let (message, line, column) = error_details(err);
@@ -347,7 +349,7 @@ fn validate_sql_inner(
 }
 
 pub fn validate_sql_impl(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
-    validate_sql_with_options(sql, dialect, FunctionArgumentsMode::Warn)
+    validate_sql_with_options(sql, dialect, FunctionArgumentsMode::Error)
 }
 
 pub fn validate_sql_with_options(
@@ -371,7 +373,7 @@ pub fn validate_sql_with_options(
 }
 
 pub fn validate_sql_unchecked(sql: &str, dialect: &SqlDialect) -> ValidationResultTuple {
-    validate_sql_inner(sql, dialect, FunctionArgumentsMode::Warn)
+    validate_sql_inner(sql, dialect, FunctionArgumentsMode::Error)
 }
 
 /// Walk every expression in the parsed statements and collect function calls
@@ -914,7 +916,7 @@ fn error_statement_index(
 /// bad syntax. Only real programming errors (e.g. unknown dialect) raise.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (sql, dialect = "trino", function_arguments = "warn"))]
+#[pyo3(signature = (sql, dialect = "trino", function_arguments = "error"))]
 fn validate(sql: &str, dialect: &str, function_arguments: &str) -> PyResult<ValidationResultTuple> {
     let parsed_dialect = SqlDialect::from_str(dialect).map_err(PyValueError::new_err)?;
     let mode =
@@ -928,7 +930,7 @@ fn validate(sql: &str, dialect: &str, function_arguments: &str) -> PyResult<Vali
 /// decode failure) raise an exception.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, dialect = "trino", function_arguments = "warn"))]
+#[pyo3(signature = (path, dialect = "trino", function_arguments = "error"))]
 fn validate_file(
     path: &str,
     dialect: &str,
@@ -946,7 +948,7 @@ fn validate_file(
 /// Validate SQL and return opt-in source metadata for each statement.
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (sql, dialect = "trino", function_arguments = "warn"))]
+#[pyo3(signature = (sql, dialect = "trino", function_arguments = "error"))]
 fn analyze_statements(
     sql: &str,
     dialect: &str,
@@ -959,7 +961,7 @@ fn analyze_statements(
 }
 
 pub fn analyze_sql_impl(sql: &str, dialect: &SqlDialect) -> StatementAnalysisTuple {
-    analyze_sql_with_options(sql, dialect, FunctionArgumentsMode::Warn)
+    analyze_sql_with_options(sql, dialect, FunctionArgumentsMode::Error)
 }
 
 pub fn analyze_sql_with_options(
@@ -990,6 +992,34 @@ mod tests {
 
     fn trino() -> SqlDialect {
         SqlDialect::Trino
+    }
+
+    #[test]
+    fn v023_default_retains_all_diagnostics_on_arity_error() {
+        let sql = "SELECT missing_fn(), sum(); SELECT min()";
+        let result = validate_sql_impl(sql, &trino());
+        let advisory = validate_sql_with_options(sql, &trino(), FunctionArgumentsMode::Warn);
+
+        assert!(!result.0);
+        assert_eq!(result.1, 0);
+        assert_eq!((result.3, result.4), (Some(1), Some(22)));
+        assert!(result
+            .2
+            .as_ref()
+            .unwrap()
+            .contains("'sum' expects 1 argument"));
+        assert_eq!(result.5, advisory.5);
+        assert_eq!(result.5.len(), 3);
+        assert!(advisory.0);
+        assert_eq!(result, validate_sql_unchecked(sql, &trino()));
+        assert_eq!(
+            result,
+            validate_sql_with_options(sql, &trino(), FunctionArgumentsMode::Error)
+        );
+        let analysis = analyze_sql_impl(sql, &trino());
+        assert_eq!(analysis.0, result);
+        assert_eq!(analysis.1.len(), 2);
+        assert_eq!(analysis.2, Some(0));
     }
 
     #[test]

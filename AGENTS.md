@@ -183,7 +183,9 @@ dialect to Generic by default for `dialect="trino"`.
 Function-name validation (`ValidationResult.warnings`) checks existence against
 the documented Trino catalog (`src/functions.rs`). A separate curated semantic
 registry checks documented argument counts for 45 unqualified built-in
-aggregate functions; it is advisory by default and can be strict or disabled.
+aggregate functions; since 0.23.0 it is strict by default and retains all
+diagnostics in `warnings` even when an argument-count error makes `valid=False`.
+Explicit advisory and disabled modes remain available for compatibility.
 It does not perform general overload resolution or argument type checking.
 False positives are possible if a deployed Trino shadows built-ins with plugin
 functions; qualified calls and inline functions are excluded from the rule.

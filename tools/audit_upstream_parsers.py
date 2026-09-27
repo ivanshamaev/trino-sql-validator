@@ -331,7 +331,7 @@ def probe(
                 json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
             ).hexdigest()
         )
-        result = validate(sql)
+        result = validate(sql, function_arguments="off")
         if result.valid is expected_valid:
             matched += 1
             continue

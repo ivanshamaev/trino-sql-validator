@@ -58,14 +58,21 @@ print(result.warnings[0])                   # TypeWarning(name='bignum', line=1,
 print(result.unknown_types)                 # ['bignum']
 
 result = validate("SELECT sum() OVER ()")
+assert not result.valid
 print(result.function_argument_warnings[0]) # sum expects 1 argument; got 0
 
 result = validate("SELECT min(), max(1, 2, 3)")
+assert not result.valid
 assert len(result.function_argument_warnings) == 2
 
-# Turn the focused argument-count diagnostic into an invalid result
-result = validate("SELECT sum()", function_arguments="error")
+# A single call returns the first error AND all diagnostics
+result = validate("SELECT sum(); SELECT min()")
 assert not result.valid
+print(result.error)                         # first error: sum()
+print(result.function_argument_warnings)    # both sum() and min()
+
+# Opt into the advisory behavior from 0.22.0 if needed
+assert validate("SELECT sum()", function_arguments="warn").valid
 
 # Preserve the syntax-only behavior from versions through 0.21.x
 assert validate("SELECT sum()", function_arguments="off").valid
@@ -107,12 +114,20 @@ The catalogs are auto-generated from the Trino docs and check *name existence*.
 Version 0.22.0 additionally checks documented argument counts for 45
 unqualified built-in aggregate functions, including `sum`, `avg`, `min`,
 `max`, `min_by`, `max_by`, statistical aggregates, map aggregates, and digest
-aggregates. `function_arguments="warn"` is the default, while `"error"` and
-`"off"` select strict and syntax-only behavior. This is a curated rule rather
+aggregates. Since 0.23.0, ordinary `validate(sql)` defaults to
+`function_arguments="error"`: a mismatch makes the result invalid and preserves
+all diagnostics in `warnings`. `error` reports the first argument-count error;
+`function_argument_warnings` lists all of them. `"warn"` and `"off"` remain
+explicit options for advisory and syntax-only behavior. This is a curated rule rather
 than general overload resolution: argument types, functions outside the
 registry, precision/scale, and semantic correctness still require Trino.
 `hive`/`generic` dialects skip these checks. False positives are possible if a
 deployed Trino adds plugin functions/types beyond the docs.
+
+Unknown names and ambiguous aliases remain advisory on their own. When parsing
+fails, no complete AST is available and `warnings` is empty. For compatibility,
+any invalid result has `statement_count=0`; `analyze_statements()` still exposes
+the source-derived statement list and the first error's statement index.
 
 For catalog name checking, inline `WITH FUNCTION` names are exempt only within
 their own query scope, while qualified calls with the same final name are still
@@ -201,7 +216,7 @@ error. Semicolon-separated statements have independent per-statement budgets.
 ## Development
 
 See [`AGENTS.md`](AGENTS.md) for setup, internal conventions, and release steps.
-The current automated suite contains 5,188 pytest cases and 90 Rust unit tests.
+The current automated suite contains 5,201 pytest cases and 91 Rust unit tests.
 It includes a 28-case LF/CRLF transformation matrix, six native-labelled token
 deletion mutations, and 18 committed seeds for three bounded fuzz targets.
 Key commands:

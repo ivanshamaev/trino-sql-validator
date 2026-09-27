@@ -7,12 +7,17 @@ use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
     if let Ok(sql) = std::str::from_utf8(data) {
         let result = validate_sql_unchecked(sql, &SqlDialect::Trino);
-        if result.0 {
-            for warning in result.5 {
-                assert!(matches!(
-                    warning.0.as_str(),
-                    "function" | "function_arguments" | "type" | "alias"
-                ));
+        for warning in result.5 {
+            assert!(matches!(
+                warning.0.as_str(),
+                "function" | "function_arguments" | "type" | "alias"
+            ));
+            if warning.0 == "function_arguments" {
+                assert!(!result.0);
+                let actual = warning.4.unwrap();
+                let expected = warning.5.unwrap();
+                assert!(!expected.is_empty());
+                assert!(!expected.contains(&actual));
             }
         }
     }
